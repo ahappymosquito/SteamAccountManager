@@ -1,0 +1,8 @@
+<!-- Steam Account Manager shield-and-switch application icon. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#20231d"/>
+  <path d="M256 66 411 122v116c0 104-63 172-155 210C164 410 101 342 101 238V122z" fill="#a0aa66"/>
+  <path d="M256 105 373 147v89c0 78-44 132-117 166-73-34-117-88-117-166v-89z" fill="#20231d"/>
+  <path d="M190 213h112l-28-28 24-24 70 70-70 70-24-24 28-28H190z" fill="#a0aa66"/>
+  <circle cx="176" cy="231" r="26" fill="#70a9dc"/>
+</svg>

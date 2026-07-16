@@ -1,0 +1,82 @@
+# Publishes a Windows x64 NSIS installer when a matching version tag is pushed.
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-windows:
+    name: Publish Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify release versions
+        shell: pwsh
+        run: |
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoText = Get-Content src-tauri/Cargo.toml -Raw
+          $cargoVersion = [regex]::Match($cargoText, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          $tagVersion = "${{ github.ref_name }}".TrimStart('v')
+          if ($packageVersion -ne $tauriVersion -or $packageVersion -ne $cargoVersion -or $packageVersion -ne $tagVersion) {
+            throw "Version mismatch: package=$packageVersion tauri=$tauriVersion cargo=$cargoVersion tag=$tagVersion"
+          }
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Check Rust formatting
+        run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
+
+      - name: Run Rust Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Build and publish GitHub Release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Steam Account Manager v__VERSION__
+          releaseBody: |
+            Windows 10/11 x64 NSIS installer.
+
+            This is an unofficial Steam utility. The executable is not code-signed, so Windows SmartScreen may display a warning.
+          releaseDraft: false
+          prerelease: false
+          args: --bundles nsis

@@ -1,0 +1,18 @@
+"users"
+{
+  "76561198000000001"
+  {
+    "AccountName" "alpha"
+    "PersonaName" "Alpha Player"
+    "RememberPassword" "1"
+    "MostRecent" "1"
+    "Timestamp" "1710000000"
+  }
+  "76561198000000002"
+  {
+    "AccountName" "beta"
+    "PersonaName" "Beta Player"
+    "RememberPassword" "1"
+    "MostRecent" "0"
+  }
+}

@@ -1,0 +1,36 @@
+[package]
+name = "steam-account-manager"
+version = "0.1.0"
+description = "Local Steam account manager for Windows"
+authors = ["Steam Account Manager Contributors"]
+edition = "2021"
+
+[lib]
+name = "steam_account_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+parking_lot = "0.12"
+sysinfo = "0.33"
+url = "2"
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+windows = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+pretty_assertions = "1"

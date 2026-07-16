@@ -1,0 +1,121 @@
+# Steam Account Manager
+
+[![Windows CI](https://github.com/ahappymosquito/SteamAccountManager/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/ahappymosquito/SteamAccountManager/actions/workflows/windows-ci.yml)
+[![Release](https://img.shields.io/github/v/release/ahappymosquito/SteamAccountManager)](https://github.com/ahappymosquito/SteamAccountManager/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账号资料管理与切换工具。它读取 Steam 官方客户端已经保存的账号列表，通过受控的注册表和 `loginusers.vdf` 修改切换本机仍然有效的登录状态。
+
+> 本项目与 Valve、Steam、完美世界、5E、FACEIT 没有官方关联。Steam 客户端更新可能改变本地配置行为，请自行备份重要数据。
+
+## 下载
+
+从 [GitHub Releases](https://github.com/ahappymosquito/SteamAccountManager/releases/latest) 下载最新的 Windows x64 NSIS 安装包。当前安装包未进行商业代码签名，Windows SmartScreen 可能显示未知发布者提示；请核对 Release 页面提供的文件来源后再运行。
+
+## 功能
+
+- 自动发现或手动配置 Steam 安装目录
+- 扫描 `config/loginusers.vdf`，按 SteamID64 同步账号
+- 管理别名、备注、分组、颜色、收藏和标签
+- 手工关联完美世界、5E、FACEIT 或其他平台账号
+- 在明确确认后关闭 Steam、备份配置、切换账号并重新启动
+- 判断本地确认、当前推测、Steam 未运行和未知状态
+- 配置并直接启动第三方平台程序，不经过 shell
+- JSON 资料导入导出、冲突预览和危险字段拦截
+- 本地切换日志、脱敏登录名和最近 10 次配置备份
+
+## 安全与隐私
+
+本工具不会保存 Steam 密码、Steam Guard 密钥、`shared_secret`、`identity_secret`、Cookie、Session Token 或浏览器数据，不会模拟登录、绕过 Steam Guard、读取进程内存、注入客户端或调用第三方私有 API。它只能切换 Steam 已经记住且本机仍有效的登录状态；状态失效时，用户必须在 Steam 官方客户端完成登录或 Steam Guard 验证。
+
+日志不会记录完整注册表、完整 VDF 内容或认证数据。Steam 登录名在日志中默认脱敏。导入器递归拒绝包含 password、cookie、token、secret、Steam Guard 等危险键名的数据。
+
+## 技术栈
+
+Tauri 2、Rust、React、TypeScript、Vite、SQLite、Tailwind 风格原生 CSS tokens、Radix Primitives、Zustand、React Hook Form 和 Zod。
+
+## 系统和开发环境
+
+- Windows 10 或 Windows 11 x64
+- Microsoft Edge WebView2 Runtime
+- Node.js 20 或更高版本、npm 10 或更高版本
+- Rust stable，目标 `x86_64-pc-windows-msvc`
+- Visual Studio 2022 Build Tools，勾选“使用 C++ 的桌面开发”和 Windows SDK
+
+## 安装与开发运行
+
+```powershell
+cmd /c npm install
+cmd /c npm run tauri dev
+```
+
+仅运行前端预览：
+
+```powershell
+cmd /c npm run dev
+```
+
+## 生产构建
+
+```powershell
+cmd /c npm run build
+cargo fmt --check --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+cmd /c npm run tauri build
+```
+
+也可以用一条命令完成测试、静态检查和本地 NSIS 打包：
+
+```powershell
+cmd /c npm run package:windows
+```
+
+NSIS 安装包生成在 `src-tauri/target/release/bundle/nsis/`。
+
+## GitHub 自动发布
+
+main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。创建与应用版本一致的标签（例如 `v0.1.0`）并推送后，发布工作流会自动创建 GitHub Release 并上传安装包。
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+## 数据与配置位置
+
+应用通过 Tauri 的 `app_data_dir` 获取用户数据目录，通常位于 `%APPDATA%\com.steamaccountmanager.desktop\`。其中包含：
+
+- `steam-account-manager.db`：SQLite 账号资料、设置和切换日志
+- `backups\`：修改前的 VDF 与元数据备份，默认保留最近 10 次
+
+应用不把数据库或备份放入 Steam 安装目录。
+
+## 账号发现原理
+
+应用依次读取当前用户和本机的 Valve Steam 注册表项，检查 `SteamPath` 或 `InstallPath`，然后验证 `steam.exe` 和 `config\loginusers.vdf`。VDF 解析器使用 tokenizer 和结构树，不使用正则粗暴解析；扫描时额外字段会被忽略但不会删除。
+
+## 账号切换原理
+
+切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出、创建备份、仅修改 `MostRecent` 的原始值跨度、写入 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam。正常退出超时不会默认强制结束 `steamservice.exe`。
+
+“本地确认”只表示注册表、VDF、进程和最近切换结果一致，不代表 Steam 或任何第三方平台提供了官方验证。
+
+## 备份和恢复
+
+每次修改 Steam 配置前会在应用数据目录创建时间戳备份，包含 `loginusers.vdf`、目标 SteamID64、操作时间和切换前的注册表摘要。切换写入失败时自动尝试恢复 VDF。设置页可在二次确认后恢复最近一次备份。
+
+## 常见错误
+
+- **未找到 Steam**：在设置页手动选择包含 `steam.exe` 的安装目录。
+- **账号不可切换**：先在 Steam 官方客户端登录并勾选记住登录状态。
+- **Steam 退出超时**：等待 Steam 完成更新或游戏退出，再重试。
+- **原生构建失败**：确认 Visual Studio C++ Build Tools 和 Windows SDK 已安装。
+- **登录验证出现**：本地状态已失效，必须在 Steam 官方客户端完成验证。
+
+## 已知限制
+
+- 首版只支持 Windows x64 和 NSIS 安装包。
+- 第三方平台关联完全由用户手工录入，不读取其当前登录账号。
+- Steam 客户端未来更新可能改变注册表或 VDF 格式。
+- 应用无法保证 Steam 记住的登录状态仍被服务端接受。
