@@ -8,6 +8,7 @@ pub struct LocalSteamAccount {
     pub account_name: Option<String>,
     pub persona_name: Option<String>,
     pub remember_password: bool,
+    pub allow_auto_login: bool,
     pub most_recent: bool,
     pub timestamp: Option<i64>,
 }

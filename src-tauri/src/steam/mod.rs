@@ -69,17 +69,23 @@ pub fn is_running() -> bool {
 }
 
 #[cfg(windows)]
-fn registry_auto_login() -> Option<String> {
+fn registry_login_state() -> Option<(String, u32)> {
     use winreg::{enums::*, RegKey};
-    RegKey::predef(HKEY_CURRENT_USER)
+    let key = RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey("Software\\Valve\\Steam")
-        .ok()?
-        .get_value("AutoLoginUser")
-        .ok()
+        .ok()?;
+    Some((
+        key.get_value("AutoLoginUser").ok()?,
+        key.get_value("RememberPassword").ok()?,
+    ))
 }
 #[cfg(not(windows))]
-fn registry_auto_login() -> Option<String> {
+fn registry_login_state() -> Option<(String, u32)> {
     None
+}
+
+fn registry_auto_login() -> Option<String> {
+    registry_login_state().map(|(account_name, _)| account_name)
 }
 pub fn status(dir: Option<&Path>) -> CurrentStatus {
     let running = is_running();
@@ -278,6 +284,106 @@ fn set_registry(account: &str) -> AppResult<()> {
         .map_err(|_| AppError::new("REGISTRY_WRITE_FAILED", "无法设置 Steam 记住密码状态"))?;
     Ok(())
 }
+
+fn validate_auto_login_state(
+    accounts: &[LocalSteamAccount],
+    registry: Option<(&str, u32)>,
+    target: &str,
+    account_name: &str,
+) -> AppResult<()> {
+    let target_account = accounts.iter().find(|account| account.steam_id64 == target);
+    let target_ready = target_account.is_some_and(|account| {
+        account.remember_password && account.allow_auto_login && account.most_recent
+    });
+    let only_target_is_recent = accounts
+        .iter()
+        .all(|account| account.steam_id64 == target || !account.most_recent);
+    let registry_ready = registry.is_some_and(|(name, remember_password)| {
+        name.eq_ignore_ascii_case(account_name) && remember_password == 1
+    });
+    if target_ready && only_target_is_recent && registry_ready {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            "STEAM_AUTOLOGIN_NOT_PERSISTED",
+            "Steam 未保留目标账号的自动登录状态，请在 Steam 官方客户端重新登录并勾选“记住我”",
+        ))
+    }
+}
+
+fn verify_auto_login_state(dir: &Path, target: &str, account_name: &str) -> AppResult<()> {
+    let accounts = read_accounts(dir)?;
+    let registry = registry_login_state();
+    validate_auto_login_state(
+        &accounts,
+        registry
+            .as_ref()
+            .map(|(name, remember_password)| (name.as_str(), *remember_password)),
+        target,
+        account_name,
+    )
+}
+
+fn wait_for_stable_auto_login(
+    dir: &Path,
+    target: &str,
+    account_name: &str,
+    startup_timeout: u64,
+) -> AppResult<()> {
+    let started = Instant::now();
+    let mut saw_running = false;
+    let mut valid_since = None;
+    let mut last_validation_error = None;
+    loop {
+        if is_running() {
+            saw_running = true;
+            match verify_auto_login_state(dir, target, account_name) {
+                Ok(()) => {
+                    let valid_at = valid_since.get_or_insert_with(Instant::now);
+                    if valid_at.elapsed() >= Duration::from_secs(2) {
+                        return Ok(());
+                    }
+                }
+                Err(error) => {
+                    valid_since = None;
+                    last_validation_error = Some(error);
+                }
+            }
+        } else {
+            valid_since = None;
+        }
+        if started.elapsed() > Duration::from_secs(startup_timeout) {
+            if saw_running {
+                return Err(last_validation_error.unwrap_or_else(|| {
+                    AppError::new(
+                        "STEAM_AUTOLOGIN_NOT_PERSISTED",
+                        "Steam 未保留目标账号的自动登录状态，请在 Steam 官方客户端重新登录并勾选“记住我”",
+                    )
+                }));
+            }
+            return Err(AppError::new(
+                "STEAM_START_TIMEOUT",
+                "Steam 未在限定时间内稳定启动，无法确认自动登录状态",
+            ));
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn switchable_account<'a>(
+    accounts: &'a [LocalSteamAccount],
+    target: &str,
+) -> AppResult<&'a LocalSteamAccount> {
+    accounts
+        .iter()
+        .find(|account| account.steam_id64 == target && account.remember_password)
+        .ok_or_else(|| {
+            AppError::new(
+                "ACCOUNT_NOT_SWITCHABLE",
+                "目标账号不存在或未被 Steam 记住，请先在 Steam 官方客户端登录并勾选“记住我”",
+            )
+        })
+}
 #[cfg(not(windows))]
 fn set_registry(_: &str) -> AppResult<()> {
     Err(AppError::new("WINDOWS_ONLY", "账号切换仅支持 Windows"))
@@ -288,17 +394,13 @@ pub fn switch(
     backup_root: &Path,
     target: &str,
     shutdown_timeout: u64,
+    startup_timeout: u64,
 ) -> AppResult<()> {
     validate_dir(dir)?;
     let path = dir.join("config/loginusers.vdf");
     let original = fs::read_to_string(&path)?;
     let accounts = vdf::parse_loginusers(&original)?;
-    let account = accounts
-        .iter()
-        .find(|a| a.steam_id64 == target && a.remember_password)
-        .ok_or_else(|| {
-            AppError::new("ACCOUNT_NOT_SWITCHABLE", "目标账号不存在或未被 Steam 记住")
-        })?;
+    let account = switchable_account(&accounts, target)?;
     let name = account
         .account_name
         .clone()
@@ -320,10 +422,11 @@ pub fn switch(
         }
     }
     let folder = backup(dir, backup_root, target)?;
-    let patched = vdf::patch_most_recent(&original, target)?;
+    let patched = vdf::patch_auto_login(&original, target)?;
     if let Err(err) = (|| {
         atomic_write(&path, &patched)?;
         set_registry(&name)?;
+        verify_auto_login_state(dir, target, &name)?;
         Ok::<(), AppError>(())
     })() {
         let _ = fs::copy(folder.join("loginusers.vdf"), &path);
@@ -332,6 +435,7 @@ pub fn switch(
     Command::new(dir.join("steam.exe"))
         .spawn()
         .map_err(|_| AppError::new("STEAM_START_FAILED", "设置已完成，但无法启动 Steam"))?;
+    wait_for_stable_auto_login(dir, target, &name, startup_timeout)?;
     Ok(())
 }
 
@@ -355,6 +459,78 @@ pub fn restore_latest(dir: &Path, backup_root: &Path) -> AppResult<()> {
 mod atomic_write_tests {
     use super::*;
     use std::cell::Cell;
+
+    fn account(
+        steam_id64: &str,
+        remember_password: bool,
+        allow_auto_login: bool,
+        most_recent: bool,
+    ) -> LocalSteamAccount {
+        LocalSteamAccount {
+            steam_id64: steam_id64.into(),
+            account_name: Some("alpha".into()),
+            persona_name: None,
+            remember_password,
+            allow_auto_login,
+            most_recent,
+            timestamp: None,
+        }
+    }
+
+    #[test]
+    fn accepts_persisted_auto_login_state() {
+        let accounts = vec![
+            account("76561198000000001", false, true, false),
+            account("76561198000000002", true, true, true),
+        ];
+        assert!(validate_auto_login_state(
+            &accounts,
+            Some(("alpha", 1)),
+            "76561198000000002",
+            "ALPHA",
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_state_rewritten_by_steam() {
+        let accounts = vec![account("76561198000000002", true, false, true)];
+        let error =
+            validate_auto_login_state(&accounts, Some(("alpha", 1)), "76561198000000002", "alpha")
+                .expect_err("disabled auto login must fail validation");
+        assert_eq!(error.code, "STEAM_AUTOLOGIN_NOT_PERSISTED");
+    }
+
+    #[test]
+    fn rejects_unremembered_or_ambiguous_recent_accounts() {
+        let unremembered = vec![account("76561198000000002", false, true, true)];
+        assert!(validate_auto_login_state(
+            &unremembered,
+            Some(("alpha", 1)),
+            "76561198000000002",
+            "alpha",
+        )
+        .is_err());
+        let ambiguous = vec![
+            account("76561198000000001", true, true, true),
+            account("76561198000000002", true, true, true),
+        ];
+        assert!(validate_auto_login_state(
+            &ambiguous,
+            Some(("alpha", 1)),
+            "76561198000000002",
+            "alpha",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rejects_account_without_remembered_credentials_before_switching() {
+        let accounts = vec![account("76561198000000002", false, false, false)];
+        let error = switchable_account(&accounts, "76561198000000002")
+            .expect_err("unremembered account must not be switchable");
+        assert_eq!(error.code, "ACCOUNT_NOT_SWITCHABLE");
+    }
 
     fn temporary_files(directory: &Path) -> Vec<PathBuf> {
         fs::read_dir(directory)

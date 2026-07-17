@@ -21,7 +21,10 @@ enum Value {
         start: usize,
         end: usize,
     },
-    Object(Vec<Entry>),
+    Object {
+        entries: Vec<Entry>,
+        close_start: usize,
+    },
 }
 #[derive(Debug, Clone)]
 struct Entry {
@@ -118,7 +121,11 @@ fn tokenize(input: &str) -> AppResult<Vec<Token>> {
     Ok(out)
 }
 
-fn parse_entries(tokens: &[Token], index: &mut usize, nested: bool) -> AppResult<Vec<Entry>> {
+fn parse_entries(
+    tokens: &[Token],
+    index: &mut usize,
+    nested: bool,
+) -> AppResult<(Vec<Entry>, Option<usize>)> {
     let mut entries = Vec::new();
     while *index < tokens.len() {
         if matches!(tokens[*index].kind, Kind::Close) {
@@ -128,8 +135,9 @@ fn parse_entries(tokens: &[Token], index: &mut usize, nested: bool) -> AppResult
                     "loginusers.vdf 存在多余的右花括号",
                 ));
             }
+            let close_start = tokens[*index].start;
             *index += 1;
-            return Ok(entries);
+            return Ok((entries, Some(close_start)));
         }
         let key = match &tokens[*index].kind {
             Kind::Text(v) => v.clone(),
@@ -155,7 +163,11 @@ fn parse_entries(tokens: &[Token], index: &mut usize, nested: bool) -> AppResult
             }
             Kind::Open => {
                 *index += 1;
-                Value::Object(parse_entries(tokens, index, true)?)
+                let (entries, close_start) = parse_entries(tokens, index, true)?;
+                Value::Object {
+                    entries,
+                    close_start: close_start.expect("nested object has a closing token"),
+                }
             }
             Kind::Close => return Err(AppError::new("VDF_MALFORMED", "loginusers.vdf 缺少字段值")),
         };
@@ -167,14 +179,14 @@ fn parse_entries(tokens: &[Token], index: &mut usize, nested: bool) -> AppResult
             "loginusers.vdf 缺少右花括号",
         ))
     } else {
-        Ok(entries)
+        Ok((entries, None))
     }
 }
 
 fn root(input: &str) -> AppResult<Vec<Entry>> {
     let tokens = tokenize(input)?;
     let mut i = 0;
-    parse_entries(&tokens, &mut i, false)
+    parse_entries(&tokens, &mut i, false).map(|(entries, _)| entries)
 }
 fn text<'a>(entries: &'a [Entry], key: &str) -> Option<&'a str> {
     entries
@@ -190,7 +202,7 @@ fn users(entries: &[Entry]) -> AppResult<&[Entry]> {
         .iter()
         .find(|e| e.key.eq_ignore_ascii_case("users"))
         .and_then(|e| match &e.value {
-            Value::Object(v) => Some(v.as_slice()),
+            Value::Object { entries, .. } => Some(entries.as_slice()),
             _ => None,
         })
         .ok_or_else(|| AppError::new("VDF_USERS_MISSING", "loginusers.vdf 中未找到 users 节点"))
@@ -201,7 +213,7 @@ pub fn parse_loginusers(input: &str) -> AppResult<Vec<LocalSteamAccount>> {
     let mut accounts = Vec::new();
     for entry in users(&parsed)? {
         let fields = match &entry.value {
-            Value::Object(v) => v,
+            Value::Object { entries, .. } => entries,
             _ => continue,
         };
         if entry.key.parse::<u64>().is_err() {
@@ -212,6 +224,7 @@ pub fn parse_loginusers(input: &str) -> AppResult<Vec<LocalSteamAccount>> {
             account_name: text(fields, "AccountName").map(str::to_owned),
             persona_name: text(fields, "PersonaName").map(str::to_owned),
             remember_password: text(fields, "RememberPassword") == Some("1"),
+            allow_auto_login: text(fields, "AllowAutoLogin") == Some("1"),
             most_recent: text(fields, "MostRecent") == Some("1"),
             timestamp: text(fields, "Timestamp").and_then(|v| v.parse().ok()),
         });
@@ -219,7 +232,34 @@ pub fn parse_loginusers(input: &str) -> AppResult<Vec<LocalSteamAccount>> {
     Ok(accounts)
 }
 
-pub fn patch_most_recent(input: &str, target: &str) -> AppResult<String> {
+fn insertion_edit(input: &str, close_start: usize, fields: &[(&str, &str)]) -> (usize, String) {
+    let line_start = input[..close_start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let closing_indent = &input[line_start..close_start];
+    if closing_indent.chars().all(char::is_whitespace) {
+        let newline = if input[..close_start].contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let mut insertion = String::new();
+        for (key, value) in fields {
+            insertion.push_str(closing_indent);
+            insertion.push('\t');
+            insertion.push_str(&format!("\"{key}\"\t\t\"{value}\"{newline}"));
+        }
+        (line_start, insertion)
+    } else {
+        let insertion = fields
+            .iter()
+            .map(|(key, value)| format!(" \"{key}\" \"{value}\""))
+            .collect::<String>();
+        (close_start, insertion)
+    }
+}
+
+pub fn patch_auto_login(input: &str, target: &str) -> AppResult<String> {
     let parsed = root(input)?;
     let accounts = users(&parsed)?;
     if !accounts.iter().any(|e| e.key == target) {
@@ -228,10 +268,13 @@ pub fn patch_most_recent(input: &str, target: &str) -> AppResult<String> {
             "目标账号不在最新的 loginusers.vdf 中",
         ));
     }
-    let mut replacements = Vec::new();
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
     for account in accounts {
-        let fields = match &account.value {
-            Value::Object(v) => v,
+        let (fields, close_start) = match &account.value {
+            Value::Object {
+                entries,
+                close_start,
+            } => (entries, *close_start),
             _ => continue,
         };
         if let Some(Value::Text { start, end, .. }) = fields
@@ -239,12 +282,36 @@ pub fn patch_most_recent(input: &str, target: &str) -> AppResult<String> {
             .find(|e| e.key.eq_ignore_ascii_case("MostRecent"))
             .map(|e| &e.value)
         {
-            replacements.push((*start, *end, if account.key == target { "1" } else { "0" }));
+            replacements.push((
+                *start,
+                *end,
+                if account.key == target { "1" } else { "0" }.to_string(),
+            ));
+        }
+        let mut missing = Vec::new();
+        if text(fields, "MostRecent").is_none() {
+            missing.push(("MostRecent", if account.key == target { "1" } else { "0" }));
+        }
+        if account.key == target {
+            if let Some(Value::Text { start, end, .. }) = fields
+                .iter()
+                .find(|entry| entry.key.eq_ignore_ascii_case("AllowAutoLogin"))
+                .map(|entry| &entry.value)
+            {
+                replacements.push((*start, *end, "1".to_string()));
+            } else {
+                missing.push(("AllowAutoLogin", "1"));
+            }
+        }
+        if !missing.is_empty() {
+            let (start, value) = insertion_edit(input, close_start, &missing);
+            replacements.push((start, start, value));
         }
     }
     let mut output = input.to_string();
+    replacements.sort_by_key(|(start, _, _)| *start);
     for (start, end, value) in replacements.into_iter().rev() {
-        output.replace_range(start..end, value);
+        output.replace_range(start..end, &value);
     }
     Ok(output)
 }
@@ -261,9 +328,10 @@ mod tests {
     }
     #[test]
     fn patches_without_losing_unknown_fields() {
-        let out = patch_most_recent(BASIC, "76561198000000002").expect("patch");
+        let out = patch_auto_login(BASIC, "76561198000000002").expect("patch");
         assert!(out.contains("\"Extra\" \"keep\""));
         assert!(parse_loginusers(&out).expect("parse")[1].most_recent);
+        assert!(parse_loginusers(&out).expect("parse")[1].allow_auto_login);
     }
     #[test]
     fn rejects_malformed() {
@@ -289,11 +357,40 @@ mod tests {
     #[test]
     fn patch_preserves_unicode_content_exactly() {
         let input = "\"users\" { \"76561198000000001\" { \"PersonaName\" \"中文玩家\" \"MostRecent\" \"1\" } \"76561198000000002\" { \"PersonaName\" \"Player 二号\" \"MostRecent\" \"0\" } }";
-        let output = patch_most_recent(input, "76561198000000002").expect("patch Unicode VDF");
+        let output = patch_auto_login(input, "76561198000000002").expect("patch Unicode VDF");
         assert!(output.contains("\"PersonaName\" \"中文玩家\""));
         assert!(output.contains("\"PersonaName\" \"Player 二号\""));
         let accounts = parse_loginusers(&output).expect("parse patched Unicode VDF");
         assert_eq!(accounts[0].persona_name.as_deref(), Some("中文玩家"));
         assert!(accounts[1].most_recent);
+    }
+
+    #[test]
+    fn updates_existing_allow_auto_login_case_insensitively() {
+        let input = "\"users\" { \"76561198000000001\" { \"AccountName\" \"alpha\" \"RememberPassword\" \"1\" \"MostRecent\" \"1\" \"allowautologin\" \"0\" } }";
+        let output = patch_auto_login(input, "76561198000000001").expect("patch auto login");
+        assert!(output.contains("\"allowautologin\" \"1\""));
+        assert!(parse_loginusers(&output).expect("parse")[0].allow_auto_login);
+    }
+
+    #[test]
+    fn inserts_missing_fields_for_all_accounts_without_changing_unknown_fields() {
+        let input = "\"users\"\r\n{\r\n\t\"76561198000000001\"\r\n\t{\r\n\t\t\"AccountName\"\t\t\"alpha\"\r\n\t\t\"RememberPassword\"\t\t\"1\"\r\n\t\t\"Unknown\"\t\t\"保留\"\r\n\t}\r\n\t\"76561198000000002\"\r\n\t{\r\n\t\t\"AccountName\"\t\t\"beta\"\r\n\t}\r\n}";
+        let output = patch_auto_login(input, "76561198000000001").expect("patch missing fields");
+        let accounts = parse_loginusers(&output).expect("parse patched accounts");
+        assert!(accounts[0].most_recent);
+        assert!(accounts[0].allow_auto_login);
+        assert!(!accounts[1].most_recent);
+        assert!(output.contains("\"Unknown\"\t\t\"保留\""));
+        assert_eq!(output.matches("AllowAutoLogin").count(), 1);
+    }
+
+    #[test]
+    fn preserves_non_target_allow_auto_login() {
+        let input = "\"users\" { \"76561198000000001\" { \"MostRecent\" \"1\" \"AllowAutoLogin\" \"1\" } \"76561198000000002\" { \"MostRecent\" \"0\" \"AllowAutoLogin\" \"0\" } }";
+        let output = patch_auto_login(input, "76561198000000002").expect("patch target");
+        let accounts = parse_loginusers(&output).expect("parse patched accounts");
+        assert!(accounts[0].allow_auto_login);
+        assert!(accounts[1].allow_auto_login);
     }
 }

@@ -76,11 +76,11 @@ NSIS 安装包生成在 `src-tauri/target/release/bundle/nsis/`。
 
 ## GitHub 自动发布
 
-main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。创建与应用版本一致的标签（例如 `v0.1.0`）并推送后，发布工作流会自动创建 GitHub Release 并上传安装包。
+main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。创建与应用版本一致的标签（例如 `v0.1.1`）并推送后，发布工作流会自动创建 GitHub Release 并上传安装包。
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 ## 数据与配置位置
@@ -98,7 +98,9 @@ git push origin v0.1.0
 
 ## 账号切换原理
 
-切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出、创建备份、仅修改 `MostRecent` 的原始值跨度、写入 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam。正常退出超时不会默认强制结束 `steamservice.exe`。
+切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出、创建备份，将目标账号设置为 `MostRecent=1` 和 `AllowAutoLogin=1`，写入注册表 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam。缺失字段会无损插入，其他账号和未知 VDF 字段保持不变。正常退出超时不会默认强制结束 `steamservice.exe`。
+
+应用会在写入后以及 Steam 稳定启动后重新检查 VDF 和注册表。只有目标账号仍为唯一的最近账号、已记住密码并允许自动登录时才记录切换成功；如果 Steam 回写或清除了这些状态，应用会提示在官方客户端重新登录并勾选“记住我”。
 
 “本地确认”只表示注册表、VDF、进程和最近切换结果一致，不代表 Steam 或任何第三方平台提供了官方验证。
 
@@ -112,7 +114,8 @@ git push origin v0.1.0
 - **账号不可切换**：先在 Steam 官方客户端登录并勾选记住登录状态。
 - **Steam 退出超时**：等待 Steam 完成更新或游戏退出，再重试。
 - **原生构建失败**：确认 Visual Studio C++ Build Tools 和 Windows SDK 已安装。
-- **登录验证出现**：本地状态已失效，必须在 Steam 官方客户端完成验证。
+- **自动登录状态未保留**：Steam 已回写或清除本地状态，请在 Steam 官方客户端重新登录并勾选“记住我”。
+- **登录验证出现**：本地凭据、Steam Guard 授权或服务端令牌已失效，必须在 Steam 官方客户端完成验证；应用不会读取或传递密码。
 
 ## 已知限制
 

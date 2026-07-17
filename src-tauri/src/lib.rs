@@ -172,13 +172,25 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
         let dir = steam_path(&state)?;
         let backup = state.data_dir.join("backups");
         fs::create_dir_all(&backup)?;
-        let timeout = state
+        let shutdown_timeout = state
             .db
             .setting("shutdown_timeout")?
             .and_then(|value| serde_json::from_str::<u64>(&value).ok())
             .unwrap_or(15)
             .clamp(5, 120);
-        steam::switch(&dir, &backup, &steam_id64, timeout)?;
+        let startup_timeout = state
+            .db
+            .setting("startup_timeout")?
+            .and_then(|value| serde_json::from_str::<u64>(&value).ok())
+            .unwrap_or(20)
+            .clamp(5, 120);
+        steam::switch(
+            &dir,
+            &backup,
+            &steam_id64,
+            shutdown_timeout,
+            startup_timeout,
+        )?;
         state.db.mark_switched(&steam_id64)?;
         Ok(account)
     })();
