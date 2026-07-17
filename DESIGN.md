@@ -2,12 +2,12 @@
 name: Steam Account Manager
 description: 克制、可靠的 Steam 本地账号管理工具
 colors:
-  primary: "oklch(0.65 0.10 110)"
-  background: "oklch(0.14 0.008 110)"
-  surface: "oklch(0.19 0.010 110)"
-  surface-raised: "oklch(0.24 0.012 110)"
-  ink: "oklch(0.94 0.006 110)"
-  muted: "oklch(0.72 0.012 110)"
+  primary: "oklch(0.72 0.17 238)"
+  background: "oklch(0.13 0.025 255)"
+  surface: "oklch(0.18 0.028 255)"
+  surface-raised: "oklch(0.23 0.030 255)"
+  ink: "oklch(0.95 0.010 255)"
+  muted: "oklch(0.74 0.020 255)"
   current: "oklch(0.69 0.12 240)"
   success: "oklch(0.70 0.14 145)"
   warning: "oklch(0.78 0.14 85)"
@@ -56,6 +56,10 @@ components:
 **Key Characteristics:** 暗色分层、克制橄榄强调、高信息密度、标准桌面交互、证据化状态文案。
 
 ## Colors
+
+整体主题由 `data-theme` 和语义 CSS tokens 驱动：极光蓝为默认主题，另有脉冲紫、薄荷青和冰川白。前三套为深色，冰川白为浅色。主题只改变语义色，不改变布局或交互含义；正文与控件文字至少达到 WCAG 2.2 AA。
+
+账号标识色固定为天蓝、青色、紫色、薄荷、珊瑚和琥珀六种键值。旧的自由颜色无法映射时只在显示层回退为天蓝，直到用户再次保存资料才写入新值。
 
 橄榄色只用于主要操作和选中态；蓝色专用于当前 Steam 账号，语义色始终配合图标和文字。
 

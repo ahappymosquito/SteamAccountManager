@@ -60,6 +60,45 @@ pub fn read_accounts(dir: &Path) -> AppResult<Vec<LocalSteamAccount>> {
         .map_err(|_| AppError::new("VDF_ENCODING", "loginusers.vdf 不是有效 UTF-8 文本"))?;
     vdf::parse_loginusers(&text)
 }
+
+pub fn sync_avatar_cache(
+    dir: &Path,
+    cache_root: &Path,
+    accounts: &[LocalSteamAccount],
+) -> AppResult<usize> {
+    let source_root = dir.join("config/avatarcache");
+    if !source_root.is_dir() {
+        return Ok(0);
+    }
+    fs::create_dir_all(cache_root)?;
+    let mut synced = 0;
+    for account in accounts {
+        if account.steam_id64.len() != 17
+            || !account.steam_id64.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            continue;
+        }
+        let source = source_root.join(format!("{}.png", account.steam_id64));
+        let Ok(metadata) = fs::metadata(&source) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() > 2 * 1024 * 1024 {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&source) else {
+            continue;
+        };
+        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            continue;
+        }
+        let destination = cache_root.join(format!("{}.png", account.steam_id64));
+        if fs::read(&destination).ok().as_deref() != Some(bytes.as_slice()) {
+            fs::write(destination, bytes)?;
+        }
+        synced += 1;
+    }
+    Ok(synced)
+}
 pub fn is_running() -> bool {
     let mut s = System::new();
     s.refresh_processes(ProcessesToUpdate::All, true);
@@ -475,6 +514,88 @@ mod atomic_write_tests {
             most_recent,
             timestamp: None,
         }
+    }
+
+    #[test]
+    fn copies_local_png_avatar_and_updates_changed_content() {
+        let steam = tempfile::tempdir().expect("steam directory");
+        let cache = tempfile::tempdir().expect("avatar cache");
+        let source = steam.path().join("config/avatarcache");
+        fs::create_dir_all(&source).expect("create avatar source");
+        let steam_id = "76561198000000002";
+        let first = b"\x89PNG\r\n\x1a\nfirst";
+        fs::write(source.join(format!("{steam_id}.png")), first).expect("write avatar");
+
+        assert_eq!(
+            sync_avatar_cache(
+                steam.path(),
+                cache.path(),
+                &[account(steam_id, true, true, true)]
+            )
+            .expect("sync"),
+            1
+        );
+        assert_eq!(
+            fs::read(cache.path().join(format!("{steam_id}.png"))).expect("cached avatar"),
+            first
+        );
+
+        let second = b"\x89PNG\r\n\x1a\nsecond";
+        fs::write(source.join(format!("{steam_id}.png")), second).expect("update avatar");
+        sync_avatar_cache(
+            steam.path(),
+            cache.path(),
+            &[account(steam_id, true, true, true)],
+        )
+        .expect("resync");
+        assert_eq!(
+            fs::read(cache.path().join(format!("{steam_id}.png"))).expect("updated cache"),
+            second
+        );
+    }
+
+    #[test]
+    fn missing_or_unsafe_avatar_never_erases_last_cache() {
+        let steam = tempfile::tempdir().expect("steam directory");
+        let cache = tempfile::tempdir().expect("avatar cache");
+        fs::create_dir_all(steam.path().join("config/avatarcache")).expect("source");
+        let steam_id = "76561198000000002";
+        let cached = cache.path().join(format!("{steam_id}.png"));
+        fs::write(&cached, b"\x89PNG\r\n\x1a\nremembered").expect("last avatar");
+
+        assert_eq!(
+            sync_avatar_cache(
+                steam.path(),
+                cache.path(),
+                &[account(steam_id, true, true, true)]
+            )
+            .expect("missing source"),
+            0
+        );
+        assert!(cached.exists());
+        fs::write(
+            steam
+                .path()
+                .join(format!("config/avatarcache/{steam_id}.png")),
+            b"not a png",
+        )
+        .expect("invalid source");
+        assert_eq!(
+            sync_avatar_cache(
+                steam.path(),
+                cache.path(),
+                &[
+                    account(steam_id, true, true, true),
+                    account("../outside", true, true, true)
+                ]
+            )
+            .expect("unsafe source"),
+            0
+        );
+        assert_eq!(
+            fs::read(cached).expect("preserved avatar"),
+            b"\x89PNG\r\n\x1a\nremembered"
+        );
     }
 
     #[test]

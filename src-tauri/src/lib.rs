@@ -52,6 +52,12 @@ fn setting_enabled(value: Option<String>, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+fn sync_local_accounts(state: &AppState, path: &Path) -> AppResult<usize> {
+    let accounts = steam::read_accounts(path)?;
+    steam::sync_avatar_cache(path, &state.data_dir.join("avatars"), &accounts)?;
+    state.db.sync_accounts(&accounts)
+}
+
 #[tauri::command]
 fn initialize_steam(state: State<AppState>) -> AppResult<StartupSteamResult> {
     let configured = state
@@ -74,8 +80,7 @@ fn initialize_steam(state: State<AppState>) -> AppResult<StartupSteamResult> {
     )?;
     let scan_performed = setting_enabled(state.db.setting("scan_on_startup")?, true);
     let account_count = if scan_performed {
-        let accounts = steam::read_accounts(&path)?;
-        state.db.sync_accounts(&accounts)?
+        sync_local_accounts(&state, &path)?
     } else {
         0
     };
@@ -102,23 +107,56 @@ fn set_steam_path(state: State<AppState>, path: String) -> AppResult<()> {
 }
 #[tauri::command]
 fn scan_accounts(state: State<AppState>) -> AppResult<usize> {
-    let accounts = steam::read_accounts(&steam_path(&state)?)?;
-    state.db.sync_accounts(&accounts)
+    sync_local_accounts(&state, &steam_path(&state)?)
 }
 #[tauri::command]
 fn list_accounts(state: State<AppState>) -> AppResult<Vec<Account>> {
-    state.db.list_accounts()
+    let mut accounts = state.db.list_accounts()?;
+    let avatar_root = state.data_dir.join("avatars");
+    for account in &mut accounts {
+        let path = avatar_root.join(format!("{}.png", account.steam_id64));
+        if path.is_file() {
+            account.avatar_path = Some(path.to_string_lossy().into_owned());
+        }
+    }
+    Ok(accounts)
 }
 #[tauri::command]
 fn save_profile(state: State<AppState>, input: ProfileInput) -> AppResult<()> {
     state.db.save_profile(&input)
 }
 #[tauri::command]
-fn delete_profile(state: State<AppState>, id: String) -> AppResult<()> {
+fn list_tags(state: State<AppState>) -> AppResult<Vec<TagOption>> {
+    state.db.list_tags()
+}
+#[tauri::command]
+fn delete_unavailable_account(state: State<AppState>, id: String) -> AppResult<()> {
     if id.trim().is_empty() {
         return Err(AppError::new("INVALID_ID", "账号 ID 不能为空"));
     }
-    state.db.delete_profile(&id)
+    let steam_id64 = state.db.delete_unavailable_account(&id)?;
+    let avatar = state
+        .data_dir
+        .join("avatars")
+        .join(format!("{steam_id64}.png"));
+    if avatar.is_file() {
+        fs::remove_file(avatar)?;
+    }
+    Ok(())
+}
+#[tauri::command]
+fn delete_all_unavailable_accounts(state: State<AppState>) -> AppResult<usize> {
+    let steam_ids = state.db.delete_all_unavailable_accounts()?;
+    for steam_id64 in &steam_ids {
+        let avatar = state
+            .data_dir
+            .join("avatars")
+            .join(format!("{steam_id64}.png"));
+        if avatar.is_file() {
+            fs::remove_file(avatar)?;
+        }
+    }
+    Ok(steam_ids.len())
 }
 #[tauri::command]
 fn list_platform_links(
@@ -251,6 +289,13 @@ fn set_setting(state: State<AppState>, key: String, value: Value) -> AppResult<(
     ];
     if !allowed.contains(&key.as_str()) {
         return Err(AppError::new("SETTING_NOT_ALLOWED", "不允许修改该设置"));
+    }
+    if key == "theme"
+        && !value
+            .as_str()
+            .is_some_and(|theme| ["aurora", "violet", "mint", "glacier"].contains(&theme))
+    {
+        return Err(AppError::new("SETTING_INVALID", "界面主题无效"));
     }
     state.db.set_setting(
         &key,
@@ -534,7 +579,9 @@ pub fn run() {
             scan_accounts,
             list_accounts,
             save_profile,
-            delete_profile,
+            list_tags,
+            delete_unavailable_account,
+            delete_all_unavailable_accounts,
             list_platform_links,
             save_platform_link,
             delete_platform_link,

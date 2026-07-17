@@ -1,5 +1,16 @@
 # Steam Account Manager
 
+## 0.1.2 账号资料与主题升级
+
+- 从 Steam 本地 `config/avatarcache` 同步头像到应用专属缓存；源头像暂时缺失时保留最后一次缓存，不调用远程 API。
+- 日常列表隐藏 Steam ID，以头像、昵称、是否在 Steam 登录列表、平台关联和标签为核心；Steam ID 仅保留在编辑资料的“高级信息”中。
+- 使用完美世界、5E、FACEIT、其他和未关联作为平台筛选；旧手工分组仅为导入兼容保留，不再显示。
+- 历史标签支持搜索、多选和按 Enter 新建；账号标识色限定为天蓝、青色、紫色、薄荷、珊瑚和琥珀。
+- 提供极光蓝、脉冲紫、薄荷青和冰川白四套高对比主题，并在启动前恢复上次主题，避免闪烁。
+- “未在 Steam 登录列表”的资料可单独或批量移除；清理只删除本应用中的别名、备注、标签关联、平台关联和头像缓存，不修改 Steam 文件。
+
+头像缓存位于应用数据目录的 `avatars\`。WebView 的本地资源权限只允许访问这个目录，不允许直接读取 Steam 配置目录。
+
 [![Windows CI](https://github.com/ahappymosquito/SteamAccountManager/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/ahappymosquito/SteamAccountManager/actions/workflows/windows-ci.yml)
 [![Release](https://img.shields.io/github/v/release/ahappymosquito/SteamAccountManager)](https://github.com/ahappymosquito/SteamAccountManager/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -76,11 +87,11 @@ NSIS 安装包生成在 `src-tauri/target/release/bundle/nsis/`。
 
 ## GitHub 自动发布
 
-main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。创建与应用版本一致的标签（例如 `v0.1.1`）并推送后，发布工作流会自动创建 GitHub Release 并上传安装包。
+main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。创建与应用版本一致的标签（例如 `v0.1.2`）并推送后，发布工作流会自动创建 GitHub Release 并上传安装包。
 
 ```powershell
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
 ## 数据与配置位置

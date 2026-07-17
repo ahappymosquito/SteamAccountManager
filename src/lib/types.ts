@@ -1,6 +1,10 @@
 /** Shared frontend models matching the validated Tauri command payloads. */
-export type Account = { id:string; steamId64:string; accountName?:string; personaName?:string; localAvailable:boolean; lastLocalSeenAt?:string; lastSwitchedAt?:string; createdAt:string; updatedAt:string; alias?:string; remark?:string; groupName?:string; color?:string; favorite:boolean; tags:string[] };
+export type PlatformCode = "perfectworld"|"5e"|"faceit"|"other";
+export type ProfileColor = "sky"|"cyan"|"violet"|"mint"|"coral"|"amber";
+export type Theme = "aurora"|"violet"|"mint"|"glacier";
+export type Account = { id:string; steamId64:string; accountName?:string; personaName?:string; localAvailable:boolean; lastLocalSeenAt?:string; lastSwitchedAt?:string; createdAt:string; updatedAt:string; alias?:string; remark?:string; groupName?:string; color?:string; favorite:boolean; tags:string[]; platformCodes:PlatformCode[]; avatarPath?:string };
 export type ProfileInput = Pick<Account,"steamId64"|"alias"|"remark"|"groupName"|"color"|"favorite"|"tags">;
+export type TagOption = { name:string; usageCount:number };
 export type PlatformLink = { id:string; steamAccountId:string; platformCode:string; externalId?:string; displayName?:string; profileUrl?:string; remark?:string; status:"unverified"|"user_confirmed"|"invalid"; lastVerifiedAt?:string };
 export type CurrentStatus = { kind:"locally_confirmed"|"inferred"|"steam_not_running"|"unknown"; accountName?:string; steamId64?:string; steamRunning:boolean };
 export type StartupSteamResult = { steamPath?:string; scanPerformed:boolean; accountCount:number };

@@ -1,12 +1,15 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Steam Account Manager",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.steamaccountmanager.desktop",
   "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
   "app": {
     "windows": [{ "label": "main", "title": "Steam Account Manager", "width": 1180, "height": 760, "minWidth": 820, "minHeight": 600, "resizable": true }],
-    "security": { "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost" }
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost",
+      "assetProtocol": { "enable": true, "scope": ["$APPDATA/com.steamaccountmanager.desktop/avatars/**/*"] }
+    }
   },
   "bundle": { "active": true, "targets": ["nsis"], "category": "Utility", "shortDescription": "Manage remembered local Steam accounts", "longDescription": "Unofficial local Steam account manager. Does not store passwords or bypass Steam Guard." }
 }

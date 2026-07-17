@@ -31,6 +31,15 @@ pub struct Account {
     pub color: Option<String>,
     pub favorite: bool,
     pub tags: Vec<String>,
+    pub platform_codes: Vec<String>,
+    pub avatar_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TagOption {
+    pub name: String,
+    pub usage_count: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
