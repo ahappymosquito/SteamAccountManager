@@ -296,7 +296,8 @@ fn backup(dir: &Path, backup_root: &Path, target: &str) -> AppResult<PathBuf> {
         dir.join("config/loginusers.vdf"),
         folder.join("loginusers.vdf"),
     )?;
-    fs::write(folder.join("metadata.json"),serde_json::to_vec_pretty(&json!({"createdAt":Utc::now().to_rfc3339(),"targetSteamId64":target,"autoLoginUser":registry_auto_login()})).map_err(|_|AppError::new("BACKUP_FAILED","无法创建备份元数据"))?)?;
+    let registry = registry_login_state();
+    fs::write(folder.join("metadata.json"),serde_json::to_vec_pretty(&json!({"createdAt":Utc::now().to_rfc3339(),"targetSteamId64":target,"autoLoginUser":registry.as_ref().map(|value| &value.0),"rememberPassword":registry.as_ref().map(|value| value.1)})).map_err(|_|AppError::new("BACKUP_FAILED","无法创建备份元数据"))?)?;
     let mut dirs: Vec<_> = fs::read_dir(backup_root)?
         .filter_map(Result::ok)
         .filter(|e| e.path().is_dir())
@@ -322,6 +323,25 @@ fn set_registry(account: &str) -> AppResult<()> {
     key.set_value("RememberPassword", &1u32)
         .map_err(|_| AppError::new("REGISTRY_WRITE_FAILED", "无法设置 Steam 记住密码状态"))?;
     Ok(())
+}
+
+#[cfg(windows)]
+fn set_registry_login_state(account: &str, remember_password: u32) -> AppResult<()> {
+    use winreg::{enums::*, RegKey};
+    let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey("Software\\Valve\\Steam")
+        .map_err(|_| AppError::new("REGISTRY_WRITE_FAILED", "无法写入 Steam 注册表设置"))?;
+    key.set_value("AutoLoginUser", &account)
+        .and_then(|_| key.set_value("RememberPassword", &remember_password))
+        .map_err(|_| AppError::new("REGISTRY_WRITE_FAILED", "无法暂停 Steam 自动登录"))
+}
+
+#[cfg(not(windows))]
+fn set_registry_login_state(_: &str, _: u32) -> AppResult<()> {
+    Err(AppError::new(
+        "WINDOWS_ONLY",
+        "Steam 登录引导仅支持 Windows",
+    ))
 }
 
 fn validate_auto_login_state(
@@ -476,6 +496,86 @@ pub fn switch(
         .map_err(|_| AppError::new("STEAM_START_FAILED", "设置已完成，但无法启动 Steam"))?;
     wait_for_stable_auto_login(dir, target, &name, startup_timeout)?;
     Ok(())
+}
+
+pub fn begin_official_login(
+    dir: &Path,
+    backup_root: &Path,
+    shutdown_timeout: u64,
+) -> AppResult<()> {
+    validate_dir(dir)?;
+    if is_running() {
+        Command::new(dir.join("steam.exe"))
+            .arg("-shutdown")
+            .spawn()
+            .map_err(|_| AppError::new("STEAM_SHUTDOWN_FAILED", "无法请求 Steam 正常退出"))?;
+        let started = Instant::now();
+        while is_running() {
+            if started.elapsed() > Duration::from_secs(shutdown_timeout) {
+                return Err(AppError::new(
+                    "STEAM_SHUTDOWN_TIMEOUT",
+                    "Steam 未在限定时间内退出，请关闭游戏后重试",
+                ));
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+    }
+    let path = dir.join("config/loginusers.vdf");
+    let original = fs::read_to_string(&path)?;
+    let original_registry = registry_login_state();
+    let folder = backup(dir, backup_root, "official-login")?;
+    let patched = vdf::patch_login_prompt(&original)?;
+    let result = (|| {
+        atomic_write(&path, &patched)?;
+        set_registry_login_state("", 0)?;
+        Command::new(dir.join("steam.exe"))
+            .spawn()
+            .map_err(|_| AppError::new("STEAM_START_FAILED", "无法启动 Steam 登录窗口"))?;
+        Ok::<(), AppError>(())
+    })();
+    if let Err(error) = result {
+        let _ = fs::copy(folder.join("loginusers.vdf"), &path);
+        if let Some((account, remember_password)) = original_registry {
+            let _ = set_registry_login_state(&account, remember_password);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn detected_login_account(
+    accounts: &[LocalSteamAccount],
+    registry: Option<(&str, u32)>,
+) -> Option<LocalSteamAccount> {
+    let (account_name, remember_password) = registry?;
+    if remember_password != 1 || account_name.trim().is_empty() {
+        return None;
+    }
+    accounts
+        .iter()
+        .find(|account| {
+            account.remember_password
+                && account.most_recent
+                && account
+                    .account_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(account_name))
+        })
+        .cloned()
+}
+
+pub fn detect_official_login(dir: &Path) -> AppResult<Option<LocalSteamAccount>> {
+    if !is_running() {
+        return Ok(None);
+    }
+    let accounts = read_accounts(dir)?;
+    let registry = registry_login_state();
+    Ok(detected_login_account(
+        &accounts,
+        registry
+            .as_ref()
+            .map(|(name, remember_password)| (name.as_str(), *remember_password)),
+    ))
 }
 
 pub fn restore_latest(dir: &Path, backup_root: &Path) -> AppResult<()> {
@@ -651,6 +751,23 @@ mod atomic_write_tests {
         let error = switchable_account(&accounts, "76561198000000002")
             .expect_err("unremembered account must not be switchable");
         assert_eq!(error.code, "ACCOUNT_NOT_SWITCHABLE");
+    }
+
+    #[test]
+    fn detects_only_current_remembered_official_login() {
+        let accounts = vec![
+            account("76561198000000001", true, false, false),
+            account("76561198000000002", true, true, true),
+        ];
+        assert_eq!(
+            detected_login_account(&accounts, Some(("alpha", 1)))
+                .expect("detected account")
+                .steam_id64,
+            "76561198000000002"
+        );
+        assert!(detected_login_account(&accounts, Some(("alpha", 0))).is_none());
+        let unremembered = vec![account("76561198000000002", false, true, true)];
+        assert!(detected_login_account(&unremembered, Some(("alpha", 1))).is_none());
     }
 
     fn temporary_files(directory: &Path) -> Vec<PathBuf> {

@@ -22,5 +22,12 @@ describe("theme and layout contracts", () => {
   it("keeps dropdown portals above dialogs", () => {
     expect(css).toMatch(/\.dialog\{[^}]*z-index:70/);
     expect(css).toMatch(/\.tag-menu\{[^}]*z-index:90/);
+    expect(css).toMatch(/\.account-drawer\{[^}]*z-index:70/);
+  });
+
+  it("keeps action text at 1180px and uses compact labels at 820px", () => {
+    expect(css).toMatch(/@media\(max-width:1180px\)\{\.row-actions \.button\.secondary\{font-size:12px/);
+    expect(css).toMatch(/@media\(max-width:820px\)\{[^}]*\.account-drawer/);
+    expect(css).toContain(".action-label{display:none}");
   });
 });

@@ -55,23 +55,21 @@ impl Database {
 
     pub fn list_accounts(&self) -> AppResult<Vec<Account>> {
         let conn = self.0.lock();
-        let mut stmt = conn.prepare("SELECT a.id,a.steam_id64,a.account_name,a.persona_name,a.local_available,a.last_local_seen_at,a.last_switched_at,a.created_at,a.updated_at,p.alias,p.remark,p.group_name,p.color,p.favorite FROM steam_accounts a LEFT JOIN account_profiles p ON p.steam_account_id=a.id ORDER BY p.favorite DESC,COALESCE(a.last_switched_at,a.created_at) DESC")?;
+        let mut stmt = conn.prepare("SELECT a.id,a.steam_id64,a.account_name,a.persona_name,a.last_local_seen_at,a.last_switched_at,a.created_at,a.updated_at,p.alias,p.remark,p.group_name,p.favorite FROM steam_accounts a LEFT JOIN account_profiles p ON p.steam_account_id=a.id WHERE a.local_available=1 ORDER BY p.favorite DESC,COALESCE(a.last_switched_at,a.created_at) DESC")?;
         let rows = stmt.query_map([], |r| {
             Ok(Account {
                 id: r.get(0)?,
                 steam_id64: r.get(1)?,
                 account_name: r.get(2)?,
                 persona_name: r.get(3)?,
-                local_available: r.get::<_, i64>(4)? != 0,
-                last_local_seen_at: r.get(5)?,
-                last_switched_at: r.get(6)?,
-                created_at: r.get(7)?,
-                updated_at: r.get(8)?,
-                alias: r.get(9)?,
-                remark: r.get(10)?,
-                group_name: r.get(11)?,
-                color: r.get(12)?,
-                favorite: r.get::<_, Option<i64>>(13)?.unwrap_or(0) != 0,
+                last_local_seen_at: r.get(4)?,
+                last_switched_at: r.get(5)?,
+                created_at: r.get(6)?,
+                updated_at: r.get(7)?,
+                alias: r.get(8)?,
+                remark: r.get(9)?,
+                group_name: r.get(10)?,
+                favorite: r.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
                 tags: Vec::new(),
                 platform_codes: Vec::new(),
                 avatar_path: None,
@@ -106,29 +104,31 @@ impl Database {
     }
 
     pub fn save_profile(&self, input: &ProfileInput) -> AppResult<()> {
-        validate_steam_id(&input.steam_id64)?;
-        if input.color.as_deref().is_some_and(|color| {
-            !["sky", "cyan", "violet", "mint", "coral", "amber"].contains(&color)
-        }) {
-            return Err(AppError::new(
-                "INVALID_PROFILE_COLOR",
-                "账号颜色不在允许的色板中",
-            ));
-        }
         let mut conn = self.0.lock();
         let tx = conn.transaction()?;
-        let now = Utc::now().to_rfc3339();
-        let id: Option<String> = tx
+        let exists = tx
             .query_row(
-                "SELECT id FROM steam_accounts WHERE steam_id64=?1",
-                [&input.steam_id64],
-                |r| r.get(0),
+                "SELECT 1 FROM steam_accounts WHERE id=?1",
+                [&input.account_id],
+                |_| Ok(()),
             )
             .optional()?;
-        let id = id.unwrap_or_else(|| Uuid::new_v4().to_string());
-        tx.execute("INSERT INTO steam_accounts(id,steam_id64,local_available,created_at,updated_at) VALUES(?1,?2,0,?3,?3) ON CONFLICT(steam_id64) DO UPDATE SET updated_at=?3",params![id,input.steam_id64,now])?;
-        tx.execute("INSERT INTO account_profiles(steam_account_id,alias,remark,group_name,color,favorite) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(steam_account_id) DO UPDATE SET alias=excluded.alias,remark=excluded.remark,group_name=excluded.group_name,color=excluded.color,favorite=excluded.favorite",params![id,input.alias,input.remark,input.group_name,input.color,input.favorite as i64])?;
-        tx.execute("DELETE FROM account_tags WHERE steam_account_id=?1", [&id])?;
+        if exists.is_none() {
+            return Err(AppError::new(
+                "ACCOUNT_NOT_FOUND",
+                "只能更新已由 Steam 扫描到的账号",
+            ));
+        }
+        let now = Utc::now().to_rfc3339();
+        tx.execute("INSERT INTO account_profiles(steam_account_id,alias,remark,favorite) VALUES(?1,?2,?3,?4) ON CONFLICT(steam_account_id) DO UPDATE SET alias=excluded.alias,remark=excluded.remark,favorite=excluded.favorite",params![input.account_id,input.alias,input.remark,input.favorite as i64])?;
+        tx.execute(
+            "UPDATE steam_accounts SET updated_at=?1 WHERE id=?2",
+            params![now, input.account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM account_tags WHERE steam_account_id=?1",
+            [&input.account_id],
+        )?;
         for name in input
             .tags
             .iter()
@@ -154,54 +154,23 @@ impl Database {
             };
             tx.execute(
                 "INSERT OR IGNORE INTO account_tags(steam_account_id,tag_id) VALUES(?1,?2)",
-                params![id, actual],
+                params![input.account_id, actual],
             )?;
         }
         tx.commit()?;
         Ok(())
     }
 
-    pub fn delete_unavailable_account(&self, id: &str) -> AppResult<String> {
-        let mut conn = self.0.lock();
-        let tx = conn.transaction()?;
-        let steam_id64 = tx
+    pub fn account_id_by_steam_id(&self, steam_id64: &str) -> AppResult<Option<String>> {
+        Ok(self
+            .0
+            .lock()
             .query_row(
-                "SELECT steam_id64 FROM steam_accounts WHERE id=?1 AND local_available=0",
-                [id],
-                |row| row.get::<_, String>(0),
+                "SELECT id FROM steam_accounts WHERE steam_id64=?1",
+                [steam_id64],
+                |row| row.get(0),
             )
-            .optional()?
-            .ok_or_else(|| {
-                AppError::new(
-                    "ACCOUNT_NOT_REMOVABLE",
-                    "只能移除未在 Steam 登录列表中的账号资料",
-                )
-            })?;
-        tx.execute(
-            "DELETE FROM steam_accounts WHERE id=?1 AND local_available=0",
-            [id],
-        )?;
-        tx.execute("DELETE FROM platform_accounts WHERE id NOT IN (SELECT platform_account_id FROM account_platform_links)", [])?;
-        tx.commit()?;
-        Ok(steam_id64)
-    }
-
-    pub fn delete_all_unavailable_accounts(&self) -> AppResult<Vec<String>> {
-        let mut conn = self.0.lock();
-        let tx = conn.transaction()?;
-        let steam_ids = {
-            let mut stmt = tx.prepare(
-                "SELECT steam_id64 FROM steam_accounts WHERE local_available=0 ORDER BY steam_id64",
-            )?;
-            let ids = stmt
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            ids
-        };
-        tx.execute("DELETE FROM steam_accounts WHERE local_available=0", [])?;
-        tx.execute("DELETE FROM platform_accounts WHERE id NOT IN (SELECT platform_account_id FROM account_platform_links)", [])?;
-        tx.commit()?;
-        Ok(steam_ids)
+            .optional()?)
     }
 
     pub fn list_links(&self, steam_account_id: &str) -> AppResult<Vec<PlatformLink>> {
@@ -322,13 +291,14 @@ pub fn validate_steam_id(value: &str) -> AppResult<()> {
 mod tests {
     use super::*;
 
-    fn profile(steam_id64: &str, tags: &[&str]) -> ProfileInput {
+    fn profile(db: &Database, steam_id64: &str, tags: &[&str]) -> ProfileInput {
         ProfileInput {
-            steam_id64: steam_id64.into(),
+            account_id: db
+                .account_id_by_steam_id(steam_id64)
+                .expect("lookup")
+                .expect("scanned account"),
             alias: Some("主力".into()),
             remark: None,
-            group_name: Some("legacy".into()),
-            color: Some("sky".into()),
             favorite: false,
             tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
         }
@@ -349,25 +319,29 @@ mod tests {
     fn migration_and_unique_id() {
         let t = tempfile::tempdir().expect("temp");
         let db = Database::open(&t.path().join("a.db")).expect("db");
-        let input = ProfileInput {
-            steam_id64: "76561198000000001".into(),
-            alias: Some("A".into()),
-            remark: None,
-            group_name: None,
-            color: None,
-            favorite: false,
-            tags: vec![],
-        };
+        db.sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
+        let input = profile(&db, "76561198000000001", &[]);
         db.save_profile(&input).expect("one");
         db.save_profile(&input).expect("merge");
         assert_eq!(db.list_accounts().expect("list").len(), 1);
+        let unknown = ProfileInput {
+            account_id: "missing".into(),
+            ..input
+        };
+        assert_eq!(
+            db.save_profile(&unknown).expect_err("unknown profile").code,
+            "ACCOUNT_NOT_FOUND"
+        );
     }
 
     #[test]
     fn platform_summary_is_assembled_with_accounts() {
         let temp = tempfile::tempdir().expect("temp");
         let db = Database::open(&temp.path().join("platform.db")).expect("db");
-        db.save_profile(&profile("76561198000000001", &[]))
+        db.sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
+        db.save_profile(&profile(&db, "76561198000000001", &[]))
             .expect("profile");
         let account = db.list_accounts().expect("accounts").remove(0);
         for platform in ["5e", "faceit"] {
@@ -390,65 +364,26 @@ mod tests {
     }
 
     #[test]
-    fn historical_tags_are_case_insensitive_and_survive_profile_cleanup() {
+    fn hidden_accounts_keep_profile_and_restore_after_credentials_return() {
         let temp = tempfile::tempdir().expect("temp");
         let db = Database::open(&temp.path().join("tags.db")).expect("db");
+        db.sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
         db.save_profile(&profile(
+            &db,
             "76561198000000001",
             &["竞技", "竞技", "RANKED", "ranked"],
         ))
         .expect("profile");
         let account = db.list_accounts().expect("accounts").remove(0);
         assert_eq!(account.tags.len(), 2);
-        db.delete_unavailable_account(&account.id).expect("cleanup");
-        let tags = db.list_tags().expect("history");
-        assert_eq!(tags.len(), 2);
-        assert!(tags.iter().all(|tag| tag.usage_count == 0));
-    }
-
-    #[test]
-    fn cleanup_rejects_available_accounts_and_prunes_orphan_platform_records() {
-        let temp = tempfile::tempdir().expect("temp");
-        let db = Database::open(&temp.path().join("cleanup.db")).expect("db");
+        db.sync_accounts(&[]).expect("credentials removed");
+        assert!(db.list_accounts().expect("hidden list").is_empty());
+        assert_eq!(db.list_tags().expect("tag history").len(), 2);
         db.sync_accounts(&[local_account("76561198000000001")])
-            .expect("scan");
-        let available = db.list_accounts().expect("accounts").remove(0);
-        assert_eq!(
-            db.delete_unavailable_account(&available.id)
-                .expect_err("available account is protected")
-                .code,
-            "ACCOUNT_NOT_REMOVABLE"
-        );
-        db.save_profile(&profile("76561198000000002", &[]))
-            .expect("unavailable profile");
-        let unavailable = db
-            .list_accounts()
-            .expect("accounts")
-            .into_iter()
-            .find(|account| !account.local_available)
-            .expect("unavailable");
-        db.save_link(&PlatformLinkInput {
-            id: None,
-            steam_account_id: unavailable.id.clone(),
-            platform_code: "other".into(),
-            external_id: Some("legacy".into()),
-            display_name: None,
-            profile_url: None,
-            remark: None,
-            status: "unverified".into(),
-        })
-        .expect("link");
-        assert_eq!(
-            db.delete_all_unavailable_accounts().expect("bulk cleanup"),
-            vec!["76561198000000002"]
-        );
-        let orphan_count: i64 =
-            db.0.lock()
-                .query_row("SELECT COUNT(*) FROM platform_accounts", [], |row| {
-                    row.get(0)
-                })
-                .expect("count");
-        assert_eq!(orphan_count, 0);
-        assert_eq!(db.list_accounts().expect("remaining").len(), 1);
+            .expect("credentials restored");
+        let restored = db.list_accounts().expect("restored list").remove(0);
+        assert_eq!(restored.alias.as_deref(), Some("主力"));
+        assert_eq!(restored.tags.len(), 2);
     }
 }

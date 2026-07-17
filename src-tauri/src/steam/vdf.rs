@@ -316,6 +316,43 @@ pub fn patch_auto_login(input: &str, target: &str) -> AppResult<String> {
     Ok(output)
 }
 
+pub fn patch_login_prompt(input: &str) -> AppResult<String> {
+    let parsed = root(input)?;
+    let accounts = users(&parsed)?;
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+    for account in accounts {
+        let (fields, close_start) = match &account.value {
+            Value::Object {
+                entries,
+                close_start,
+            } => (entries, *close_start),
+            _ => continue,
+        };
+        let mut missing = Vec::new();
+        for key in ["MostRecent", "AllowAutoLogin"] {
+            if let Some(Value::Text { start, end, .. }) = fields
+                .iter()
+                .find(|entry| entry.key.eq_ignore_ascii_case(key))
+                .map(|entry| &entry.value)
+            {
+                replacements.push((*start, *end, "0".to_string()));
+            } else {
+                missing.push((key, "0"));
+            }
+        }
+        if !missing.is_empty() {
+            let (start, value) = insertion_edit(input, close_start, &missing);
+            replacements.push((start, start, value));
+        }
+    }
+    let mut output = input.to_string();
+    replacements.sort_by_key(|(start, _, _)| *start);
+    for (start, end, value) in replacements.into_iter().rev() {
+        output.replace_range(start..end, &value);
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,5 +429,16 @@ mod tests {
         let accounts = parse_loginusers(&output).expect("parse patched accounts");
         assert!(accounts[0].allow_auto_login);
         assert!(accounts[1].allow_auto_login);
+    }
+
+    #[test]
+    fn login_prompt_patch_disables_selection_without_changing_credentials() {
+        let output = patch_login_prompt(BASIC).expect("patch login prompt");
+        let accounts = parse_loginusers(&output).expect("parse patched accounts");
+        assert!(accounts[0].remember_password);
+        assert!(!accounts[0].most_recent);
+        assert!(!accounts[0].allow_auto_login);
+        assert!(output.contains("\"Extra\" \"keep\""));
+        assert!(output.contains("\"RememberPassword\" \"1\""));
     }
 }

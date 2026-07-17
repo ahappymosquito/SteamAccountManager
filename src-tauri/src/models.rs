@@ -20,7 +20,6 @@ pub struct Account {
     pub steam_id64: String,
     pub account_name: Option<String>,
     pub persona_name: Option<String>,
-    pub local_available: bool,
     pub last_local_seen_at: Option<String>,
     pub last_switched_at: Option<String>,
     pub created_at: String,
@@ -28,7 +27,6 @@ pub struct Account {
     pub alias: Option<String>,
     pub remark: Option<String>,
     pub group_name: Option<String>,
-    pub color: Option<String>,
     pub favorite: bool,
     pub tags: Vec<String>,
     pub platform_codes: Vec<String>,
@@ -45,14 +43,27 @@ pub struct TagOption {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileInput {
-    pub steam_id64: String,
+    pub account_id: String,
     pub alias: Option<String>,
     pub remark: Option<String>,
-    pub group_name: Option<String>,
-    pub color: Option<String>,
     pub favorite: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamLoginSession {
+    pub id: String,
+    pub started_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamLoginStatus {
+    pub state: String,
+    pub account_id: Option<String>,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

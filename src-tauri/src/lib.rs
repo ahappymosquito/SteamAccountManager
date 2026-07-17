@@ -17,6 +17,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 use tauri::{Manager, State};
 use uuid::Uuid;
@@ -26,6 +27,12 @@ pub struct AppState {
     data_dir: PathBuf,
     switch_lock: AtomicBool,
     launch_lock: Mutex<()>,
+    login_sessions: Mutex<BTreeMap<String, LoginSessionRecord>>,
+}
+
+#[derive(Clone)]
+struct LoginSessionRecord {
+    started: Instant,
 }
 fn steam_path(state: &AppState) -> AppResult<PathBuf> {
     let value = state
@@ -45,17 +52,21 @@ fn select_steam_path(
     discover()
 }
 
-fn setting_enabled(value: Option<String>, default: bool) -> bool {
-    value
-        .as_deref()
-        .and_then(|value| serde_json::from_str::<bool>(value).ok())
-        .unwrap_or(default)
-}
-
 fn sync_local_accounts(state: &AppState, path: &Path) -> AppResult<usize> {
-    let accounts = steam::read_accounts(path)?;
+    let accounts = remembered_accounts(steam::read_accounts(path)?);
     steam::sync_avatar_cache(path, &state.data_dir.join("avatars"), &accounts)?;
     state.db.sync_accounts(&accounts)
+}
+
+fn remembered_accounts(accounts: Vec<LocalSteamAccount>) -> Vec<LocalSteamAccount> {
+    accounts
+        .into_iter()
+        .filter(|account| account.remember_password)
+        .collect()
+}
+
+fn login_session_timed_out(elapsed: Duration) -> bool {
+    elapsed >= Duration::from_secs(300)
 }
 
 #[tauri::command]
@@ -78,12 +89,8 @@ fn initialize_steam(state: State<AppState>) -> AppResult<StartupSteamResult> {
         &serde_json::to_string(&path)
             .map_err(|_| AppError::new("SETTING_INVALID", "无法保存 Steam 路径"))?,
     )?;
-    let scan_performed = setting_enabled(state.db.setting("scan_on_startup")?, true);
-    let account_count = if scan_performed {
-        sync_local_accounts(&state, &path)?
-    } else {
-        0
-    };
+    let scan_performed = true;
+    let account_count = sync_local_accounts(&state, &path)?;
     Ok(StartupSteamResult {
         steam_path: Some(path.to_string_lossy().into_owned()),
         scan_performed,
@@ -129,34 +136,80 @@ fn save_profile(state: State<AppState>, input: ProfileInput) -> AppResult<()> {
 fn list_tags(state: State<AppState>) -> AppResult<Vec<TagOption>> {
     state.db.list_tags()
 }
+
 #[tauri::command]
-fn delete_unavailable_account(state: State<AppState>, id: String) -> AppResult<()> {
-    if id.trim().is_empty() {
-        return Err(AppError::new("INVALID_ID", "账号 ID 不能为空"));
-    }
-    let steam_id64 = state.db.delete_unavailable_account(&id)?;
-    let avatar = state
-        .data_dir
-        .join("avatars")
-        .join(format!("{steam_id64}.png"));
-    if avatar.is_file() {
-        fs::remove_file(avatar)?;
-    }
-    Ok(())
-}
-#[tauri::command]
-fn delete_all_unavailable_accounts(state: State<AppState>) -> AppResult<usize> {
-    let steam_ids = state.db.delete_all_unavailable_accounts()?;
-    for steam_id64 in &steam_ids {
-        let avatar = state
-            .data_dir
-            .join("avatars")
-            .join(format!("{steam_id64}.png"));
-        if avatar.is_file() {
-            fs::remove_file(avatar)?;
+fn begin_steam_login(state: State<AppState>) -> AppResult<SteamLoginSession> {
+    {
+        let mut sessions = state.login_sessions.lock();
+        sessions.retain(|_, session| !login_session_timed_out(session.started.elapsed()));
+        if !sessions.is_empty() {
+            return Err(AppError::new(
+                "STEAM_LOGIN_IN_PROGRESS",
+                "已有 Steam 登录流程正在等待完成",
+            ));
         }
     }
-    Ok(steam_ids.len())
+    let path = steam_path(&state)?;
+    let shutdown_timeout = state
+        .db
+        .setting("shutdown_timeout")?
+        .and_then(|value| serde_json::from_str::<u64>(&value).ok())
+        .unwrap_or(15)
+        .clamp(5, 120);
+    fs::create_dir_all(state.data_dir.join("backups"))?;
+    steam::begin_official_login(&path, &state.data_dir.join("backups"), shutdown_timeout)?;
+    let id = Uuid::new_v4().to_string();
+    let started_at = Utc::now().to_rfc3339();
+    state.login_sessions.lock().insert(
+        id.clone(),
+        LoginSessionRecord {
+            started: Instant::now(),
+        },
+    );
+    Ok(SteamLoginSession { id, started_at })
+}
+
+#[tauri::command]
+fn get_steam_login_status(
+    state: State<AppState>,
+    session_id: String,
+) -> AppResult<SteamLoginStatus> {
+    let session = state
+        .login_sessions
+        .lock()
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| AppError::new("STEAM_LOGIN_SESSION_NOT_FOUND", "登录等待已结束或不存在"))?;
+    if login_session_timed_out(session.started.elapsed()) {
+        state.login_sessions.lock().remove(&session_id);
+        return Ok(SteamLoginStatus {
+            state: "timed_out".into(),
+            account_id: None,
+            message: Some("未检测到已记住的 Steam 登录，请重新尝试并勾选“记住我”".into()),
+        });
+    }
+    let path = steam_path(&state)?;
+    let Some(account) = steam::detect_official_login(&path)? else {
+        return Ok(SteamLoginStatus {
+            state: "pending".into(),
+            account_id: None,
+            message: None,
+        });
+    };
+    sync_local_accounts(&state, &path)?;
+    let account_id = state.db.account_id_by_steam_id(&account.steam_id64)?;
+    state.login_sessions.lock().remove(&session_id);
+    Ok(SteamLoginStatus {
+        state: "completed".into(),
+        account_id,
+        message: Some("Steam 登录已完成，账号列表已刷新".into()),
+    })
+}
+
+#[tauri::command]
+fn cancel_steam_login(state: State<AppState>, session_id: String) -> AppResult<()> {
+    state.login_sessions.lock().remove(&session_id);
+    Ok(())
 }
 #[tauri::command]
 fn list_platform_links(
@@ -201,12 +254,6 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
             .into_iter()
             .find(|a| a.steam_id64 == steam_id64)
             .ok_or_else(|| AppError::new("ACCOUNT_NOT_FOUND", "找不到目标账号"))?;
-        if !account.local_available {
-            return Err(AppError::new(
-                "ACCOUNT_NOT_LOCAL",
-                "目标账号当前不在本机 Steam 登录列表中",
-            ));
-        }
         let dir = steam_path(&state)?;
         let backup = state.data_dir.join("backups");
         fs::create_dir_all(&backup)?;
@@ -454,22 +501,21 @@ fn preview_import(state: State<AppState>, data: Value) -> AppResult<ImportPrevie
             blocked_fields: blocked,
         });
     }
-    let existing = state.db.list_accounts()?;
     let items = data
         .get("accounts")
         .and_then(Value::as_array)
         .ok_or_else(|| AppError::new("IMPORT_INVALID", "导入文件缺少 accounts 数组"))?;
-    let mut added = 0;
+    let added = 0;
     let mut updated = 0;
     let mut skipped = 0;
     for item in items {
         if let Some(id) = item.get("steamId64").and_then(Value::as_str) {
             if validate_steam_id(id).is_err() {
                 skipped += 1;
-            } else if existing.iter().any(|a| a.steam_id64 == id) {
+            } else if state.db.account_id_by_steam_id(id)?.is_some() {
                 updated += 1
             } else {
-                added += 1
+                skipped += 1
             }
         } else {
             skipped += 1
@@ -499,6 +545,9 @@ fn apply_import(state: State<AppState>, data: Value, overwrite: bool) -> AppResu
         if validate_steam_id(id).is_err() {
             continue;
         }
+        let Some(account_id) = state.db.account_id_by_steam_id(id)? else {
+            continue;
+        };
         let old = state
             .db
             .list_accounts()?
@@ -515,11 +564,9 @@ fn apply_import(state: State<AppState>, data: Value, overwrite: bool) -> AppResu
             }
         };
         let input = ProfileInput {
-            steam_id64: id.into(),
+            account_id,
             alias: pick("alias", old.as_ref().and_then(|a| a.alias.clone())),
             remark: pick("remark", old.as_ref().and_then(|a| a.remark.clone())),
-            group_name: pick("groupName", old.as_ref().and_then(|a| a.group_name.clone())),
-            color: pick("color", old.as_ref().and_then(|a| a.color.clone())),
             favorite: if overwrite {
                 item.get("favorite")
                     .and_then(Value::as_bool)
@@ -569,6 +616,7 @@ pub fn run() {
                 data_dir,
                 switch_lock: AtomicBool::new(false),
                 launch_lock: Mutex::new(()),
+                login_sessions: Mutex::new(BTreeMap::new()),
             });
             Ok(())
         })
@@ -580,8 +628,9 @@ pub fn run() {
             list_accounts,
             save_profile,
             list_tags,
-            delete_unavailable_account,
-            delete_all_unavailable_accounts,
+            begin_steam_login,
+            get_steam_login_status,
+            cancel_steam_login,
             list_platform_links,
             save_platform_link,
             delete_platform_link,
@@ -651,20 +700,40 @@ mod tests {
     }
 
     #[test]
-    fn startup_scan_setting_defaults_on_and_respects_off() {
-        assert!(setting_enabled(None, true));
-        assert!(!setting_enabled(Some("false".into()), true));
-    }
-
-    #[test]
     fn masks_names() {
         assert_eq!(mask_name("abcdefgh"), "ab***gh");
         assert_eq!(mask_name("abc"), "***");
     }
+
     #[test]
     fn blocks_nested_secrets() {
         let mut out = vec![];
         dangerous(&json!({"nested":{"shared_secret":"x"}}), "$", &mut out);
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn scan_ignores_accounts_without_remembered_credentials() {
+        let account = |steam_id64: &str, remember_password: bool| LocalSteamAccount {
+            steam_id64: steam_id64.into(),
+            account_name: None,
+            persona_name: None,
+            remember_password,
+            allow_auto_login: false,
+            most_recent: false,
+            timestamp: None,
+        };
+        let filtered = remembered_accounts(vec![
+            account("76561198000000001", true),
+            account("76561198000000002", false),
+        ]);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].steam_id64, "76561198000000001");
+    }
+
+    #[test]
+    fn official_login_session_times_out_at_five_minutes() {
+        assert!(!login_session_timed_out(Duration::from_secs(299)));
+        assert!(login_session_timed_out(Duration::from_secs(300)));
     }
 }

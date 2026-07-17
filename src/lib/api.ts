@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, CurrentStatus, ImportPreview, PlatformLink, ProfileInput, StartupSteamResult, SwitchLog, TagOption } from "./types";
+import type { Account, CurrentStatus, ImportPreview, PlatformLink, ProfileInput, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -11,8 +11,9 @@ export const api = {
   status: () => invoke<CurrentStatus>("current_status"),
   saveProfile: (input:ProfileInput) => invoke<void>("save_profile", { input }),
   tags: () => invoke<TagOption[]>("list_tags"),
-  deleteUnavailableAccount: (id:string) => invoke<void>("delete_unavailable_account", { id }),
-  deleteAllUnavailableAccounts: () => invoke<number>("delete_all_unavailable_accounts"),
+  beginSteamLogin: () => invoke<SteamLoginSession>("begin_steam_login"),
+  steamLoginStatus: (sessionId:string) => invoke<SteamLoginStatus>("get_steam_login_status", { sessionId }),
+  cancelSteamLogin: (sessionId:string) => invoke<void>("cancel_steam_login", { sessionId }),
   switchAccount: (steamId64:string) => invoke<{success:boolean;stage:string;message:string}>("switch_account", { steamId64 }),
   links: (steamAccountId:string) => invoke<PlatformLink[]>("list_platform_links", { steamAccountId }),
   saveLink: (input:Omit<PlatformLink,"lastVerifiedAt">) => invoke<void>("save_platform_link", { input }),

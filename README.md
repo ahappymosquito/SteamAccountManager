@@ -1,5 +1,13 @@
 # Steam Account Manager
 
+## 0.1.3 Steam 官方登录新增与账号详情
+
+- “添加 Steam 账号”会安全重启 Steam，并等待用户在官方登录窗口登录；应用不读取或传递密码。
+- 账号列表只展示 Steam 已记住的账号。无凭证账号会隐藏，但别名、备注、标签、平台关联和头像缓存继续保留。
+- 账号详情与编辑合并为右侧抽屉，登录账号名仅在详情显示，SteamID64 不再进入界面。
+- 标签支持多选快速筛选，账号必须同时满足全部已选标签。
+- 移除手工 SteamID64 新增、不可用账号清理入口和账号标识色；导入只能更新已扫描过的账号。
+
 ## 0.1.2 账号资料与主题升级
 
 - 从 Steam 本地 `config/avatarcache` 同步头像到应用专属缓存；源头像暂时缺失时保留最后一次缓存，不调用远程 API。
@@ -28,7 +36,8 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 - 启动时自动发现 Steam 安装目录，失败时也可手动配置
 - 默认在启动时扫描 `config/loginusers.vdf`，按 SteamID64 同步账号
 - 正确显示和搜索 UTF-8 中文登录名与个人昵称
-- 管理别名、备注、分组、颜色、收藏和标签
+- 管理别名、备注、收藏、标签和平台关联，并使用多标签精确筛选
+- 通过 Steam 官方登录窗口添加账号，只展示已勾选“记住我”的账号
 - 手工关联完美世界、5E、FACEIT 或其他平台账号
 - 在明确确认后关闭 Steam、备份配置、切换账号并重新启动
 - 判断本地确认、当前推测、Steam 未运行和未知状态
@@ -87,11 +96,11 @@ NSIS 安装包生成在 `src-tauri/target/release/bundle/nsis/`。
 
 ## GitHub 自动发布
 
-main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。创建与应用版本一致的标签（例如 `v0.1.2`）并推送后，发布工作流会自动创建 GitHub Release 并上传安装包。
+main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。创建与应用版本一致的标签（例如 `v0.1.3`）并推送后，发布工作流会自动创建 GitHub Release 并上传安装包。
 
 ```powershell
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 ## 数据与配置位置
@@ -105,7 +114,7 @@ git push origin v0.1.2
 
 ## 账号发现原理
 
-应用启动时优先验证已保存的 Steam 路径；路径不存在或失效时，依次读取当前用户和本机的 Valve Steam 注册表项，检查 `SteamPath` 或 `InstallPath`，然后验证 `steam.exe` 和 `config\loginusers.vdf`。默认会继续扫描账号，也可以在设置中关闭“启动应用时扫描账号”。VDF 解析器使用支持 UTF-8 中文名称的 tokenizer 和结构树，不使用正则粗暴解析；扫描时额外字段会被忽略但不会删除。
+应用启动时优先验证已保存的 Steam 路径；路径不存在或失效时，依次读取当前用户和本机的 Valve Steam 注册表项，检查 `SteamPath` 或 `InstallPath`，然后验证 `steam.exe` 和 `config\loginusers.vdf`。路径有效时会自动扫描账号和头像。VDF 解析器使用支持 UTF-8 中文名称的 tokenizer 和结构树，不使用正则粗暴解析；扫描时额外字段会被忽略但不会删除。
 
 ## 账号切换原理
 
