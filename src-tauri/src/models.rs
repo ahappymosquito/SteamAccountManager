@@ -83,6 +83,14 @@ pub struct CurrentStatus {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StartupSteamResult {
+    pub steam_path: Option<String>,
+    pub scan_performed: bool,
+    pub account_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SwitchResult {
     pub success: bool,
     pub stage: String,

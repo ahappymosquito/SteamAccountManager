@@ -1,8 +1,9 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, CurrentStatus, ImportPreview, PlatformLink, ProfileInput, SwitchLog } from "./types";
+import type { Account, CurrentStatus, ImportPreview, PlatformLink, ProfileInput, StartupSteamResult, SwitchLog } from "./types";
 
 export const api = {
+  initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
   accounts: () => invoke<Account[]>("list_accounts"),
   discoverSteam: () => invoke<string | null>("discover_steam"),
   setSteamPath: (path:string) => invoke<void>("set_steam_path", { path }),

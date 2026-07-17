@@ -61,19 +61,28 @@ fn tokenize(input: &str) -> AppResult<Vec<Token>> {
             b'"' => {
                 i += 1;
                 let start = i;
+                let mut segment_start = i;
                 let mut value = String::new();
                 while i < bytes.len() && bytes[i] != b'"' {
                     if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        value.push_str(&input[segment_start..i]);
                         i += 1;
-                        value.push(match bytes[i] {
-                            b'n' => '\n',
-                            b't' => '\t',
-                            other => other as char,
+                        let escaped = input[i..].chars().next().ok_or_else(|| {
+                            AppError::new("VDF_MALFORMED", "loginusers.vdf 包含无效转义")
+                        })?;
+                        value.push(match escaped {
+                            'n' => '\n',
+                            't' => '\t',
+                            other => other,
                         });
+                        i += escaped.len_utf8();
+                        segment_start = i;
                     } else {
-                        value.push(bytes[i] as char);
+                        let character = input[i..].chars().next().ok_or_else(|| {
+                            AppError::new("VDF_ENCODING", "loginusers.vdf 不是有效 UTF-8 文本")
+                        })?;
+                        i += character.len_utf8();
                     }
-                    i += 1;
                 }
                 if i >= bytes.len() {
                     return Err(AppError::new(
@@ -81,6 +90,7 @@ fn tokenize(input: &str) -> AppResult<Vec<Token>> {
                         "loginusers.vdf 包含未结束的字符串",
                     ));
                 }
+                value.push_str(&input[segment_start..i]);
                 out.push(Token {
                     kind: Kind::Text(value),
                     start,
@@ -258,5 +268,32 @@ mod tests {
     #[test]
     fn rejects_malformed() {
         assert!(parse_loginusers("\"users\" { \"x").is_err());
+    }
+
+    #[test]
+    fn parses_chinese_and_mixed_account_names() {
+        let input = "\"users\" { \"76561198000000003\" { \"AccountName\" \"中文账号\" \"PersonaName\" \"玩家 Alice\" \"RememberPassword\" \"1\" \"MostRecent\" \"1\" } }";
+        let accounts = parse_loginusers(input).expect("parse Unicode names");
+        assert_eq!(accounts[0].account_name.as_deref(), Some("中文账号"));
+        assert_eq!(accounts[0].persona_name.as_deref(), Some("玩家 Alice"));
+    }
+
+    #[test]
+    fn parses_escaped_text_without_corrupting_unicode() {
+        let input = "\"users\" { \"76561198000000003\" { \"AccountName\" \"中文\\\"账号\" \"PersonaName\" \"第一行\\n第二行\" } }";
+        let accounts = parse_loginusers(input).expect("parse escaped Unicode names");
+        assert_eq!(accounts[0].account_name.as_deref(), Some("中文\"账号"));
+        assert_eq!(accounts[0].persona_name.as_deref(), Some("第一行\n第二行"));
+    }
+
+    #[test]
+    fn patch_preserves_unicode_content_exactly() {
+        let input = "\"users\" { \"76561198000000001\" { \"PersonaName\" \"中文玩家\" \"MostRecent\" \"1\" } \"76561198000000002\" { \"PersonaName\" \"Player 二号\" \"MostRecent\" \"0\" } }";
+        let output = patch_most_recent(input, "76561198000000002").expect("patch Unicode VDF");
+        assert!(output.contains("\"PersonaName\" \"中文玩家\""));
+        assert!(output.contains("\"PersonaName\" \"Player 二号\""));
+        let accounts = parse_loginusers(&output).expect("parse patched Unicode VDF");
+        assert_eq!(accounts[0].persona_name.as_deref(), Some("中文玩家"));
+        assert!(accounts[1].most_recent);
     }
 }

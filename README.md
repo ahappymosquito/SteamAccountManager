@@ -14,8 +14,9 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 
 ## 功能
 
-- 自动发现或手动配置 Steam 安装目录
-- 扫描 `config/loginusers.vdf`，按 SteamID64 同步账号
+- 启动时自动发现 Steam 安装目录，失败时也可手动配置
+- 默认在启动时扫描 `config/loginusers.vdf`，按 SteamID64 同步账号
+- 正确显示和搜索 UTF-8 中文登录名与个人昵称
 - 管理别名、备注、分组、颜色、收藏和标签
 - 手工关联完美世界、5E、FACEIT 或其他平台账号
 - 在明确确认后关闭 Steam、备份配置、切换账号并重新启动
@@ -93,7 +94,7 @@ git push origin v0.1.0
 
 ## 账号发现原理
 
-应用依次读取当前用户和本机的 Valve Steam 注册表项，检查 `SteamPath` 或 `InstallPath`，然后验证 `steam.exe` 和 `config\loginusers.vdf`。VDF 解析器使用 tokenizer 和结构树，不使用正则粗暴解析；扫描时额外字段会被忽略但不会删除。
+应用启动时优先验证已保存的 Steam 路径；路径不存在或失效时，依次读取当前用户和本机的 Valve Steam 注册表项，检查 `SteamPath` 或 `InstallPath`，然后验证 `steam.exe` 和 `config\loginusers.vdf`。默认会继续扫描账号，也可以在设置中关闭“启动应用时扫描账号”。VDF 解析器使用支持 UTF-8 中文名称的 tokenizer 和结构树，不使用正则粗暴解析；扫描时额外字段会被忽略但不会删除。
 
 ## 账号切换原理
 

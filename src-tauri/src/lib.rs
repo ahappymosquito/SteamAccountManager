@@ -35,6 +35,57 @@ fn steam_path(state: &AppState) -> AppResult<PathBuf> {
     serde_json::from_str(&value).map_err(|_| AppError::new("SETTING_INVALID", "Steam 路径设置无效"))
 }
 
+fn select_steam_path(
+    configured: Option<PathBuf>,
+    discover: impl FnOnce() -> AppResult<Option<PathBuf>>,
+) -> AppResult<Option<PathBuf>> {
+    if let Some(path) = configured.filter(|path| steam::validate_dir(path).is_ok()) {
+        return Ok(Some(path));
+    }
+    discover()
+}
+
+fn setting_enabled(value: Option<String>, default: bool) -> bool {
+    value
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<bool>(value).ok())
+        .unwrap_or(default)
+}
+
+#[tauri::command]
+fn initialize_steam(state: State<AppState>) -> AppResult<StartupSteamResult> {
+    let configured = state
+        .db
+        .setting("steam_path")?
+        .and_then(|value| serde_json::from_str::<PathBuf>(&value).ok());
+    let path = select_steam_path(configured, steam::discover)?;
+    let Some(path) = path else {
+        return Ok(StartupSteamResult {
+            steam_path: None,
+            scan_performed: false,
+            account_count: 0,
+        });
+    };
+
+    state.db.set_setting(
+        "steam_path",
+        &serde_json::to_string(&path)
+            .map_err(|_| AppError::new("SETTING_INVALID", "无法保存 Steam 路径"))?,
+    )?;
+    let scan_performed = setting_enabled(state.db.setting("scan_on_startup")?, true);
+    let account_count = if scan_performed {
+        let accounts = steam::read_accounts(&path)?;
+        state.db.sync_accounts(&accounts)?
+    } else {
+        0
+    };
+    Ok(StartupSteamResult {
+        steam_path: Some(path.to_string_lossy().into_owned()),
+        scan_performed,
+        account_count,
+    })
+}
+
 #[tauri::command]
 fn discover_steam() -> AppResult<Option<String>> {
     Ok(steam::discover()?.map(|p| p.to_string_lossy().into_owned()))
@@ -465,6 +516,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            initialize_steam,
             discover_steam,
             set_steam_path,
             scan_accounts,
@@ -494,6 +546,57 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    fn fake_steam_dir() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().expect("temporary Steam directory");
+        fs::write(directory.path().join("steam.exe"), []).expect("fake steam.exe");
+        fs::create_dir_all(directory.path().join("config")).expect("config directory");
+        fs::write(
+            directory.path().join("config/loginusers.vdf"),
+            "\"users\" {}",
+        )
+        .expect("fake loginusers.vdf");
+        directory
+    }
+
+    #[test]
+    fn startup_prefers_valid_configured_path() {
+        let configured = fake_steam_dir();
+        let discovery_called = Cell::new(false);
+        let selected = select_steam_path(Some(configured.path().to_path_buf()), || {
+            discovery_called.set(true);
+            Ok(None)
+        })
+        .expect("select path");
+        assert_eq!(selected.as_deref(), Some(configured.path()));
+        assert!(!discovery_called.get());
+    }
+
+    #[test]
+    fn startup_falls_back_when_configured_path_is_invalid() {
+        let discovered = fake_steam_dir();
+        let selected = select_steam_path(Some(PathBuf::from("missing-steam")), || {
+            Ok(Some(discovered.path().to_path_buf()))
+        })
+        .expect("select path");
+        assert_eq!(selected.as_deref(), Some(discovered.path()));
+    }
+
+    #[test]
+    fn startup_allows_steam_to_be_absent() {
+        assert_eq!(
+            select_steam_path(None, || Ok(None)).expect("select path"),
+            None
+        );
+    }
+
+    #[test]
+    fn startup_scan_setting_defaults_on_and_respects_off() {
+        assert!(setting_enabled(None, true));
+        assert!(!setting_enabled(Some("false".into()), true));
+    }
+
     #[test]
     fn masks_names() {
         assert_eq!(mask_name("abcdefgh"), "ab***gh");
