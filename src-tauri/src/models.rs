@@ -108,6 +108,7 @@ pub struct StartupSteamResult {
     pub steam_path: Option<String>,
     pub scan_performed: bool,
     pub account_count: usize,
+    pub platform_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

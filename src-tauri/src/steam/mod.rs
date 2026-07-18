@@ -1,10 +1,12 @@
 //! Windows Steam discovery, process control, backups and safe local switching.
 pub mod vdf;
 use crate::error::{AppError, AppResult};
-use crate::models::{CurrentStatus, LocalSteamAccount};
+use crate::models::{CurrentStatus, LocalSteamAccount, PlatformApp};
 use chrono::Utc;
 use serde_json::json;
 use std::{
+    collections::HashSet,
+    env,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -13,6 +15,171 @@ use std::{
     time::{Duration, Instant},
 };
 use sysinfo::{ProcessesToUpdate, System};
+
+const PERFECTWORLD_EXECUTABLES: &[&str] = &[
+    "完美世界竞技平台.exe",
+    "PerfectWorld.exe",
+    "PerfectWorldArena.exe",
+    "PerfectWorldLauncher.exe",
+];
+const FIVE_E_EXECUTABLES: &[&str] = &[
+    "5EPlay.exe",
+    "5EClient.exe",
+    "5EPlatform.exe",
+    "5E.exe",
+    "Client.exe",
+];
+
+fn platform_specs() -> [(
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+); 2] {
+    [
+        (
+            "perfectworld",
+            "完美世界竞技平台",
+            &["完美世界竞技平台", "perfectworld", "perfect world"],
+            PERFECTWORLD_EXECUTABLES,
+        ),
+        ("5e", "5E", &["5e", "5eplay"], FIVE_E_EXECUTABLES),
+    ]
+}
+
+pub fn discover_platform_apps() -> AppResult<Vec<PlatformApp>> {
+    let mut apps = Vec::new();
+    let mut seen = HashSet::new();
+    for (platform_code, name, keywords, executables) in platform_specs() {
+        let mut candidates = known_platform_candidates(platform_code, executables);
+        #[cfg(windows)]
+        candidates.extend(registry_platform_candidates(keywords, executables));
+        for candidate in candidates {
+            if !candidate.is_file()
+                || candidate
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_none_or(|value| !value.eq_ignore_ascii_case("exe"))
+            {
+                continue;
+            }
+            let key = candidate.to_string_lossy().to_ascii_lowercase();
+            if !seen.insert(key) {
+                continue;
+            }
+            apps.push(PlatformApp {
+                platform_code: platform_code.into(),
+                name: name.into(),
+                executable_path: candidate.to_string_lossy().into_owned(),
+                arguments: Vec::new(),
+                working_directory: candidate
+                    .parent()
+                    .map(|directory| directory.to_string_lossy().into_owned()),
+                prelaunch_check: true,
+            });
+            break;
+        }
+    }
+    Ok(apps)
+}
+
+fn known_platform_candidates(platform_code: &str, executables: &[&str]) -> Vec<PathBuf> {
+    let folders: &[&str] = match platform_code {
+        "perfectworld" => &["perfectworldarena", "PerfectWorldArena", "完美世界竞技平台"],
+        "5e" => &["5E", "5EPlay", "5eplay", "5E对战平台"],
+        _ => &[],
+    };
+    let mut candidates = Vec::new();
+    for variable in [
+        "ProgramFiles(x86)",
+        "ProgramFiles",
+        "ProgramW6432",
+        "LOCALAPPDATA",
+        "APPDATA",
+    ] {
+        if let Some(root) = env::var_os(variable) {
+            for folder in folders {
+                for executable in executables {
+                    candidates.push(PathBuf::from(&root).join(folder).join(executable));
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        for root in [
+            PathBuf::from(r"C:\Program Files (x86)"),
+            PathBuf::from(r"C:\Program Files"),
+        ] {
+            for folder in folders {
+                for executable in executables {
+                    candidates.push(root.join(folder).join(executable));
+                }
+            }
+        }
+    }
+    candidates
+}
+
+#[cfg(windows)]
+fn registry_platform_candidates(keywords: &[&str], executables: &[&str]) -> Vec<PathBuf> {
+    use winreg::{enums::*, RegKey};
+
+    let mut candidates = Vec::new();
+    let roots = [
+        (
+            RegKey::predef(HKEY_CURRENT_USER),
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        ),
+    ];
+    for (root, key_path) in roots {
+        let Ok(uninstall) = root.open_subkey(key_path) else {
+            continue;
+        };
+        for subkey in uninstall.enum_keys().filter_map(Result::ok) {
+            let Ok(entry) = uninstall.open_subkey(&subkey) else {
+                continue;
+            };
+            let display_name = entry
+                .get_value::<String, _>("DisplayName")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !keywords
+                .iter()
+                .any(|keyword| display_name.contains(keyword))
+            {
+                continue;
+            }
+            if let Ok(value) = entry.get_value::<String, _>("DisplayIcon") {
+                if let Some(path) = registry_executable_path(&value) {
+                    candidates.push(path);
+                }
+            }
+            if let Ok(value) = entry.get_value::<String, _>("InstallLocation") {
+                let directory = PathBuf::from(value);
+                for executable in executables {
+                    candidates.push(directory.join(executable));
+                }
+            }
+        }
+    }
+    candidates
+}
+
+#[cfg(windows)]
+fn registry_executable_path(value: &str) -> Option<PathBuf> {
+    let path = value.split(',').next()?.trim().trim_matches('"');
+    let path = PathBuf::from(path);
+    path.is_file().then_some(path)
+}
 
 pub fn validate_dir(path: &Path) -> AppResult<()> {
     if !path.join("steam.exe").is_file() || !path.join("config/loginusers.vdf").is_file() {
@@ -78,7 +245,9 @@ pub fn sync_avatar_cache(
         {
             continue;
         }
-        let source = source_root.join(format!("{}.png", account.steam_id64));
+        let Some(source) = find_avatar_source(&source_root, &account.steam_id64) else {
+            continue;
+        };
         let Ok(metadata) = fs::metadata(&source) else {
             continue;
         };
@@ -88,10 +257,10 @@ pub fn sync_avatar_cache(
         let Ok(bytes) = fs::read(&source) else {
             continue;
         };
-        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let Some(extension) = avatar_extension(&bytes) else {
             continue;
-        }
-        let destination = cache_root.join(format!("{}.png", account.steam_id64));
+        };
+        let destination = cache_root.join(format!("{}.{}", account.steam_id64, extension));
         if fs::read(&destination).ok().as_deref() != Some(bytes.as_slice()) {
             fs::write(destination, bytes)?;
         }
@@ -99,12 +268,158 @@ pub fn sync_avatar_cache(
     }
     Ok(synced)
 }
+
+fn find_avatar_source(source_root: &Path, steam_id64: &str) -> Option<PathBuf> {
+    for suffix in ["_full", "", "_medium", "_small"] {
+        for extension in ["jpg", "jpeg", "png"] {
+            let candidate = source_root.join(format!("{steam_id64}{suffix}.{extension}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    fs::read_dir(source_root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.is_file()
+                && path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| {
+                        stem == steam_id64
+                            || stem
+                                .strip_prefix(steam_id64)
+                                .is_some_and(|suffix| suffix.starts_with('_'))
+                    })
+        })
+}
+
+fn avatar_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("jpg")
+    } else {
+        None
+    }
+}
+
+pub fn avatar_path(cache_root: &Path, steam_id64: &str) -> Option<PathBuf> {
+    ["jpg", "png", "jpeg"]
+        .into_iter()
+        .map(|extension| cache_root.join(format!("{steam_id64}.{extension}")))
+        .find(|path| path.is_file())
+}
 pub fn is_running() -> bool {
     let mut s = System::new();
     s.refresh_processes(ProcessesToUpdate::All, true);
     s.processes()
         .values()
         .any(|p| p.name().eq_ignore_ascii_case("steam.exe"))
+}
+
+pub fn launch_platform(app: &PlatformApp) -> AppResult<()> {
+    let path = PathBuf::from(&app.executable_path);
+    if !path.is_file()
+        || path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_none_or(|value| !value.eq_ignore_ascii_case("exe"))
+    {
+        return Err(AppError::new(
+            "EXECUTABLE_NOT_FOUND",
+            "骞冲彴绋嬪簭鏂囦欢涓嶅瓨鍦ㄦ垨涓嶆槸鏈夋晥鐨?Windows .exe",
+        ));
+    }
+    let mut command = Command::new(&path);
+    command.args(&app.arguments);
+    if let Some(directory) = app
+        .working_directory
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        if !Path::new(directory).is_dir() {
+            return Err(AppError::new(
+                "WORKING_DIRECTORY_INVALID",
+                "骞冲彴宸ヤ綔鐩綍涓嶅瓨鍦ㄦ垨鏃犳晥",
+            ));
+        }
+        command.current_dir(directory);
+    }
+    command
+        .spawn()
+        .map_err(|_| AppError::new("PLATFORM_LAUNCH_FAILED", "鏃犳硶鍚姩骞冲彴绋嬪簭"))?;
+    Ok(())
+}
+
+fn platform_process_matches(process: &sysinfo::Process, executable: &Path) -> bool {
+    let configured_name = executable.file_name().and_then(|value| value.to_str());
+    process.exe().is_some_and(|path| {
+        path == executable
+            || path
+                .file_name()
+                .zip(configured_name)
+                .is_some_and(|(actual, expected)| {
+                    actual.to_string_lossy().eq_ignore_ascii_case(expected)
+                })
+    }) || configured_name.is_some_and(|expected| {
+        process
+            .name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(expected)
+    })
+}
+
+fn platform_is_running(executable: &Path) -> bool {
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    system
+        .processes()
+        .values()
+        .any(|process| platform_process_matches(process, executable))
+}
+
+fn stop_platform(executable: &Path, shutdown_timeout: u64) -> AppResult<()> {
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    let processes: Vec<_> = system
+        .processes()
+        .values()
+        .filter(|process| platform_process_matches(process, executable))
+        .map(|process| process.pid())
+        .collect();
+    for pid in processes {
+        if let Some(process) = system.process(pid) {
+            if !process.kill() {
+                return Err(AppError::new(
+                    "PLATFORM_SHUTDOWN_FAILED",
+                    "鏃犳硶鍏抽棴宸茬櫥褰曠殑骞冲彴绋嬪簭",
+                ));
+            }
+        }
+    }
+    let started = Instant::now();
+    while platform_is_running(executable) {
+        if started.elapsed() > Duration::from_secs(shutdown_timeout) {
+            return Err(AppError::new(
+                "PLATFORM_SHUTDOWN_TIMEOUT",
+                "骞冲彴绋嬪簭鏈兘鍦ㄩ檺瀹氭椂闂村唴閫€鍑?",
+            ));
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Ok(())
+}
+
+pub fn restart_platform(app: &PlatformApp, shutdown_timeout: u64) -> AppResult<()> {
+    let executable = PathBuf::from(&app.executable_path);
+    if platform_is_running(&executable) {
+        stop_platform(&executable, shutdown_timeout)?;
+    }
+    launch_platform(app)
 }
 
 #[cfg(windows)]
@@ -651,6 +966,35 @@ mod atomic_write_tests {
         assert_eq!(
             fs::read(cache.path().join(format!("{steam_id}.png"))).expect("updated cache"),
             second
+        );
+    }
+
+    #[test]
+    fn copies_full_jpeg_avatar_to_the_app_cache() {
+        let steam = tempfile::tempdir().expect("steam directory");
+        let cache = tempfile::tempdir().expect("avatar cache");
+        let source = steam.path().join("config/avatarcache");
+        fs::create_dir_all(&source).expect("create avatar source");
+        let steam_id = "76561198000000002";
+        let jpeg = b"\xff\xd8\xffjpeg-avatar";
+        fs::write(source.join(format!("{steam_id}_full.jpg")), jpeg).expect("write avatar");
+
+        assert_eq!(
+            sync_avatar_cache(
+                steam.path(),
+                cache.path(),
+                &[account(steam_id, true, true, true)]
+            )
+            .expect("sync"),
+            1
+        );
+        assert_eq!(
+            fs::read(cache.path().join(format!("{steam_id}.jpg"))).expect("cached avatar"),
+            jpeg
+        );
+        assert_eq!(
+            avatar_path(cache.path(), steam_id),
+            Some(cache.path().join(format!("{steam_id}.jpg")))
         );
     }
 

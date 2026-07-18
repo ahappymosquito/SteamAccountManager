@@ -1,6 +1,6 @@
 [package]
 name = "steam-account-manager"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local Steam account manager for Windows"
 authors = ["Steam Account Manager Contributors"]
 edition = "2021"

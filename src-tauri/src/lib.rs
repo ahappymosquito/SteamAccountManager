@@ -58,6 +58,16 @@ fn sync_local_accounts(state: &AppState, path: &Path) -> AppResult<usize> {
     state.db.sync_accounts(&accounts)
 }
 
+fn auto_configure_platforms(state: &AppState) -> AppResult<usize> {
+    let mut configured = 0;
+    for app in steam::discover_platform_apps()? {
+        if state.db.ensure_platform_app(&app)? {
+            configured += 1;
+        }
+    }
+    Ok(configured)
+}
+
 fn remembered_accounts(accounts: Vec<LocalSteamAccount>) -> Vec<LocalSteamAccount> {
     accounts
         .into_iter()
@@ -81,6 +91,7 @@ fn initialize_steam(state: State<AppState>) -> AppResult<StartupSteamResult> {
             steam_path: None,
             scan_performed: false,
             account_count: 0,
+            platform_count: auto_configure_platforms(&state)?,
         });
     };
 
@@ -91,10 +102,12 @@ fn initialize_steam(state: State<AppState>) -> AppResult<StartupSteamResult> {
     )?;
     let scan_performed = true;
     let account_count = sync_local_accounts(&state, &path)?;
+    let platform_count = auto_configure_platforms(&state)?;
     Ok(StartupSteamResult {
         steam_path: Some(path.to_string_lossy().into_owned()),
         scan_performed,
         account_count,
+        platform_count,
     })
 }
 
@@ -121,8 +134,7 @@ fn list_accounts(state: State<AppState>) -> AppResult<Vec<Account>> {
     let mut accounts = state.db.list_accounts()?;
     let avatar_root = state.data_dir.join("avatars");
     for account in &mut accounts {
-        let path = avatar_root.join(format!("{}.png", account.steam_id64));
-        if path.is_file() {
+        if let Some(path) = steam::avatar_path(&avatar_root, &account.steam_id64) {
             account.avatar_path = Some(path.to_string_lossy().into_owned());
         }
     }
@@ -277,6 +289,9 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
             startup_timeout,
         )?;
         state.db.mark_switched(&steam_id64)?;
+        for app in state.db.list_platform_apps()?.into_iter() {
+            steam::restart_platform(&app, shutdown_timeout)?;
+        }
         Ok(account)
     })();
     state.switch_lock.store(false, Ordering::Release);
@@ -399,6 +414,17 @@ fn save_platform_app(state: State<AppState>, app: PlatformApp) -> AppResult<()> 
     state.db.0.lock().execute("INSERT INTO platform_apps(platform_code,name,executable_path,arguments_json,working_directory,prelaunch_check,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(platform_code) DO UPDATE SET name=excluded.name,executable_path=excluded.executable_path,arguments_json=excluded.arguments_json,working_directory=excluded.working_directory,prelaunch_check=excluded.prelaunch_check,updated_at=excluded.updated_at",params![app.platform_code,app.name,app.executable_path,args,app.working_directory,app.prelaunch_check as i64,Utc::now().to_rfc3339()])?;
     Ok(())
 }
+
+#[tauri::command]
+fn list_platform_apps(state: State<AppState>) -> AppResult<Vec<PlatformApp>> {
+    state.db.list_platform_apps()
+}
+
+#[tauri::command]
+fn discover_platform_apps() -> AppResult<Vec<PlatformApp>> {
+    steam::discover_platform_apps()
+}
+
 #[tauri::command]
 fn launch_platform(
     state: State<AppState>,
@@ -641,6 +667,8 @@ pub fn run() {
             list_switch_logs,
             clear_switch_logs,
             save_platform_app,
+            list_platform_apps,
+            discover_platform_apps,
             launch_platform,
             export_data,
             preview_import,

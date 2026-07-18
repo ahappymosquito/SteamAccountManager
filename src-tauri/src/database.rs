@@ -1,7 +1,8 @@
 //! SQLite migrations and transactional repositories for application data.
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    Account, LocalSteamAccount, PlatformLink, PlatformLinkInput, ProfileInput, TagOption,
+    Account, LocalSteamAccount, PlatformApp, PlatformLink, PlatformLinkInput, ProfileInput,
+    TagOption,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -251,6 +252,47 @@ impl Database {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn list_platform_apps(&self) -> AppResult<Vec<PlatformApp>> {
+        let conn = self.0.lock();
+        let mut stmt = conn.prepare(
+            "SELECT platform_code,name,executable_path,arguments_json,working_directory,prelaunch_check FROM platform_apps ORDER BY platform_code",
+        )?;
+        let apps = stmt
+            .query_map([], |row| {
+                Ok(PlatformApp {
+                    platform_code: row.get(0)?,
+                    name: row.get(1)?,
+                    executable_path: row.get(2)?,
+                    arguments: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or_default(),
+                    working_directory: row.get(4)?,
+                    prelaunch_check: row.get::<_, i64>(5)? != 0,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(apps)
+    }
+
+    pub fn ensure_platform_app(&self, app: &PlatformApp) -> AppResult<bool> {
+        let conn = self.0.lock();
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT executable_path FROM platform_apps WHERE platform_code=?1",
+                [&app.platform_code],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if existing
+            .as_deref()
+            .is_some_and(|path| Path::new(path).is_file())
+        {
+            return Ok(false);
+        }
+        let args = serde_json::to_string(&app.arguments)
+            .map_err(|_| AppError::new("INVALID_ARGUMENTS", "鍚姩鍙傛暟鏃犳晥"))?;
+        let changed = conn.execute("INSERT INTO platform_apps(platform_code,name,executable_path,arguments_json,working_directory,prelaunch_check,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(platform_code) DO UPDATE SET name=excluded.name,executable_path=excluded.executable_path,arguments_json=excluded.arguments_json,working_directory=excluded.working_directory,prelaunch_check=excluded.prelaunch_check,updated_at=excluded.updated_at", params![app.platform_code, app.name, app.executable_path, args, app.working_directory, app.prelaunch_check as i64, Utc::now().to_rfc3339()])?;
+        Ok(changed > 0)
     }
     pub fn setting(&self, key: &str) -> AppResult<Option<String>> {
         Ok(self

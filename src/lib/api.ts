@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, CurrentStatus, ImportPreview, PlatformLink, ProfileInput, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption } from "./types";
+import type { Account, CurrentStatus, ImportPreview, PlatformApp, PlatformLink, ProfileInput, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -22,6 +22,9 @@ export const api = {
   setSetting: (key:string,value:unknown) => invoke<void>("set_setting", { key,value }),
   logs: () => invoke<SwitchLog[]>("list_switch_logs"),
   clearLogs: () => invoke<void>("clear_switch_logs"),
+  platformApps: () => invoke<PlatformApp[]>("list_platform_apps"),
+  discoverPlatformApps: () => invoke<PlatformApp[]>("discover_platform_apps"),
+  savePlatformApp: (app:PlatformApp) => invoke<void>("save_platform_app", { app }),
   exportData: (includeSettings:boolean) => invoke<Record<string,unknown>>("export_data", { includeSettings }),
   previewImport: (data:unknown) => invoke<ImportPreview>("preview_import", { data }),
   applyImport: (data:unknown,overwrite:boolean) => invoke<ImportPreview>("apply_import", { data,overwrite }),
