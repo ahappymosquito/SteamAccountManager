@@ -62,10 +62,28 @@ jobs:
       - name: Build NSIS installer
         run: npm run tauri -- build --bundles nsis
 
+      - name: Package portable edition
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $portableDirectory = "Steam-Account-Manager-$version-windows-x64-portable"
+          New-Item -ItemType Directory -Path $portableDirectory | Out-Null
+          Copy-Item "src-tauri/target/release/steam-account-manager.exe" "$portableDirectory/Steam Account Manager.exe"
+          Copy-Item "README.md", "LICENSE" $portableDirectory
+          Compress-Archive -Path $portableDirectory -DestinationPath "$portableDirectory.zip"
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v7
         with:
           name: Steam-Account-Manager-windows-x64-${{ github.sha }}
           path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Windows portable edition
+        uses: actions/upload-artifact@v7
+        with:
+          name: Steam-Account-Manager-windows-x64-portable-${{ github.sha }}
+          path: Steam-Account-Manager-*-windows-x64-portable.zip
           if-no-files-found: error
           retention-days: 14

@@ -74,9 +74,25 @@ jobs:
           tagName: v__VERSION__
           releaseName: Steam Account Manager v__VERSION__
           releaseBody: |
-            Windows 10/11 x64 NSIS installer.
+            Windows 10/11 x64 简体中文安装包与免安装版。
 
-            This is an unofficial Steam utility. The executable is not code-signed, so Windows SmartScreen may display a warning.
+            本工具与 Valve 或 Steam 没有官方关联。程序未进行商业代码签名，Windows SmartScreen 可能显示未知发布者提示。
           releaseDraft: false
           prerelease: false
           args: --bundles nsis
+
+      - name: Package portable edition
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $portableDirectory = "Steam-Account-Manager-$version-windows-x64-portable"
+          New-Item -ItemType Directory -Path $portableDirectory | Out-Null
+          Copy-Item "src-tauri/target/release/steam-account-manager.exe" "$portableDirectory/Steam Account Manager.exe"
+          Copy-Item "README.md", "LICENSE" $portableDirectory
+          Compress-Archive -Path $portableDirectory -DestinationPath "$portableDirectory.zip"
+          "PORTABLE_ARCHIVE=$portableDirectory.zip" >> $env:GITHUB_ENV
+
+      - name: Upload portable edition to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "${{ env.PORTABLE_ARCHIVE }}" --clobber

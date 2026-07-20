@@ -1,5 +1,10 @@
 # Steam Account Manager
 
+## 0.3.0 中文安装向导与免安装版
+
+- Windows NSIS 安装与卸载向导固定使用简体中文。
+- GitHub Release 同时提供简体中文安装包和免安装 ZIP 包。
+
 ## 0.2.1 头像与平台自动联动
 - 启动时自动检测完美世界竞技平台和 5E 客户端；切换 Steam 账号后重启已配置平台。
 - 兼容 Steam 本地 PNG/JPEG 头像缓存并修复头像读取路径。
