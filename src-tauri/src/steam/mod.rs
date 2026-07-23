@@ -1,7 +1,7 @@
 //! Windows Steam discovery, process control, backups and safe local switching.
 pub mod vdf;
 use crate::error::{AppError, AppResult};
-use crate::models::{CurrentStatus, LocalSteamAccount, PlatformApp};
+use crate::models::{Cs2Config, CurrentStatus, LocalSteamAccount, PlatformApp};
 use chrono::Utc;
 use serde_json::json;
 use std::{
@@ -83,39 +83,141 @@ pub fn discover_platform_apps() -> AppResult<Vec<PlatformApp>> {
     Ok(apps)
 }
 
+pub fn discover_cs2_configs(steam_dir: &Path) -> AppResult<Vec<Cs2Config>> {
+    const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
+    let userdata = steam_dir.join("userdata");
+    if !userdata.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut configs = Vec::new();
+    for entry in fs::read_dir(userdata)?.filter_map(Result::ok) {
+        let Some(account_id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let cfg = entry.path().join("730").join("local").join("cfg");
+        if !cfg.is_dir() {
+            continue;
+        }
+        let file_count = fs::read_dir(&cfg)?
+            .filter_map(Result::ok)
+            .filter(|file| {
+                file.file_type().is_ok_and(|kind| kind.is_file())
+                    && file
+                        .path()
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| {
+                            extension.eq_ignore_ascii_case("cfg")
+                                || extension.eq_ignore_ascii_case("vcfg")
+                                || extension.eq_ignore_ascii_case("txt")
+                        })
+            })
+            .count();
+        if file_count == 0 {
+            continue;
+        }
+        configs.push(Cs2Config {
+            steam_id64: (STEAM_ID64_BASE + account_id).to_string(),
+            path: cfg.to_string_lossy().into_owned(),
+            file_count,
+        });
+    }
+    configs.sort_by(|left, right| left.steam_id64.cmp(&right.steam_id64));
+    Ok(configs)
+}
+
 fn known_platform_candidates(platform_code: &str, executables: &[&str]) -> Vec<PathBuf> {
     let folders: &[&str] = match platform_code {
         "perfectworld" => &["perfectworldarena", "PerfectWorldArena", "完美世界竞技平台"],
         "5e" => &["5E", "5EPlay", "5eplay", "5E对战平台"],
         _ => &[],
     };
-    let mut candidates = Vec::new();
-    for variable in [
+    let roots: Vec<PathBuf> = [
         "ProgramFiles(x86)",
         "ProgramFiles",
         "ProgramW6432",
         "LOCALAPPDATA",
         "APPDATA",
-    ] {
-        if let Some(root) = env::var_os(variable) {
-            for folder in folders {
-                for executable in executables {
-                    candidates.push(PathBuf::from(&root).join(folder).join(executable));
-                }
-            }
-        }
-    }
+    ]
+    .into_iter()
+    .filter_map(env::var_os)
+    .map(PathBuf::from)
+    .collect();
+    let mut candidates = known_platform_candidates_from_roots(folders, executables, roots.iter());
     #[cfg(windows)]
     {
-        for root in [
+        let fallback_roots = [
             PathBuf::from(r"C:\Program Files (x86)"),
             PathBuf::from(r"C:\Program Files"),
-        ] {
-            for folder in folders {
-                for executable in executables {
-                    candidates.push(root.join(folder).join(executable));
-                }
-            }
+        ];
+        candidates.extend(known_platform_candidates_from_roots(
+            folders,
+            executables,
+            fallback_roots.iter(),
+        ));
+    }
+    candidates
+}
+
+fn known_platform_candidates_from_roots<'a>(
+    folders: &[&str],
+    executables: &[&str],
+    roots: impl IntoIterator<Item = &'a PathBuf>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for root in roots {
+        for folder in folders {
+            let installation = root.join(folder);
+            candidates.extend(platform_executables_below(&installation, executables, 3));
+        }
+    }
+    candidates
+}
+
+fn platform_executables_below(
+    directory: &Path,
+    executables: &[&str],
+    remaining_depth: usize,
+) -> Vec<PathBuf> {
+    let mut candidates = executables
+        .iter()
+        .map(|executable| directory.join(executable))
+        .collect::<Vec<_>>();
+    if remaining_depth == 0 || !directory.is_dir() {
+        return candidates;
+    }
+    let Ok(entries) = fs::read_dir(directory) else {
+        return candidates;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            candidates.extend(platform_executables_below(
+                &path,
+                executables,
+                remaining_depth - 1,
+            ));
+        } else if file_type.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    executables
+                        .iter()
+                        .any(|executable| name.eq_ignore_ascii_case(executable))
+                })
+        {
+            candidates.push(path);
         }
     }
     candidates
@@ -165,9 +267,7 @@ fn registry_platform_candidates(keywords: &[&str], executables: &[&str]) -> Vec<
             }
             if let Ok(value) = entry.get_value::<String, _>("InstallLocation") {
                 let directory = PathBuf::from(value);
-                for executable in executables {
-                    candidates.push(directory.join(executable));
-                }
+                candidates.extend(platform_executables_below(&directory, executables, 3));
             }
         }
     }
@@ -1112,6 +1212,51 @@ mod atomic_write_tests {
         assert!(detected_login_account(&accounts, Some(("alpha", 0))).is_none());
         let unremembered = vec![account("76561198000000002", false, true, true)];
         assert!(detected_login_account(&unremembered, Some(("alpha", 1))).is_none());
+    }
+
+    #[test]
+    fn discovers_platform_executable_in_nested_install_directory() {
+        let root = tempfile::tempdir().expect("temporary install root");
+        let executable = root.path().join("5EPlay").join("app").join("5EClient.exe");
+        fs::create_dir_all(executable.parent().expect("executable parent"))
+            .expect("nested install directory");
+        fs::write(&executable, []).expect("fake platform executable");
+
+        let roots = [root.path().to_path_buf()];
+        let candidates =
+            known_platform_candidates_from_roots(&["5EPlay"], FIVE_E_EXECUTABLES, roots.iter());
+
+        assert!(
+            candidates.contains(&executable),
+            "nested 5E installation must be detected"
+        );
+    }
+
+    #[test]
+    fn discovers_account_scoped_cs2_configuration() {
+        let steam = tempfile::tempdir().expect("temporary Steam directory");
+        let cfg = steam
+            .path()
+            .join("userdata")
+            .join("39734272")
+            .join("730")
+            .join("local")
+            .join("cfg");
+        fs::create_dir_all(&cfg).expect("CS2 cfg directory");
+        fs::write(cfg.join("cs2_user_keys_0_slot0.vcfg"), b"key bindings")
+            .expect("CS2 key configuration");
+        fs::write(
+            cfg.join("cs2_user_convars_0_slot0.vcfg"),
+            b"console variables",
+        )
+        .expect("CS2 variable configuration");
+
+        let configs = discover_cs2_configs(steam.path()).expect("discover CS2 configurations");
+
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].steam_id64, "76561198000000000");
+        assert_eq!(configs[0].path, cfg.to_string_lossy());
+        assert_eq!(configs[0].file_count, 2);
     }
 
     fn temporary_files(directory: &Path) -> Vec<PathBuf> {

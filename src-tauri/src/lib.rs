@@ -426,6 +426,11 @@ fn discover_platform_apps() -> AppResult<Vec<PlatformApp>> {
 }
 
 #[tauri::command]
+fn discover_cs2_configs(state: State<AppState>) -> AppResult<Vec<Cs2Config>> {
+    steam::discover_cs2_configs(&steam_path(&state)?)
+}
+
+#[tauri::command]
 fn launch_platform(
     state: State<AppState>,
     platform_code: String,
@@ -669,6 +674,7 @@ pub fn run() {
             save_platform_app,
             list_platform_apps,
             discover_platform_apps,
+            discover_cs2_configs,
             launch_platform,
             export_data,
             preview_import,

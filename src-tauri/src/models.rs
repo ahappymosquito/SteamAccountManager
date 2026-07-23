@@ -140,6 +140,14 @@ pub struct PlatformApp {
     pub prelaunch_check: bool,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Cs2Config {
+    pub steam_id64: String,
+    pub path: String,
+    pub file_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SwitchLog {

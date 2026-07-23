@@ -6,6 +6,7 @@ export type ProfileInput = { accountId:string; alias?:string; remark?:string; fa
 export type TagOption = { name:string; usageCount:number };
 export type PlatformLink = { id:string; steamAccountId:string; platformCode:string; externalId?:string; displayName?:string; profileUrl?:string; remark?:string; status:"unverified"|"user_confirmed"|"invalid"; lastVerifiedAt?:string };
 export type PlatformApp = { platformCode:PlatformCode; name:string; executablePath:string; arguments:string[]; workingDirectory?:string; prelaunchCheck:boolean };
+export type Cs2Config = { steamId64:string; path:string; fileCount:number };
 export type CurrentStatus = { kind:"locally_confirmed"|"inferred"|"steam_not_running"|"unknown"; accountName?:string; steamId64?:string; steamRunning:boolean };
 export type StartupSteamResult = { steamPath?:string; scanPerformed:boolean; accountCount:number; platformCount:number };
 export type SwitchLog = { id:string; steamAccountId?:string; accountName?:string; startedAt:string; finishedAt?:string; result:string; errorMessage?:string };
