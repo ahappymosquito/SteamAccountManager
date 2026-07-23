@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, Cs2Config, CurrentStatus, ImportPreview, PlatformApp, PlatformLink, ProfileInput, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption } from "./types";
+import type { Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, Cs2Config, Cs2RuntimeFile, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformLink, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -25,6 +25,20 @@ export const api = {
   platformApps: () => invoke<PlatformApp[]>("list_platform_apps"),
   discoverPlatformApps: () => invoke<PlatformApp[]>("discover_platform_apps"),
   discoverCs2Configs: () => invoke<Cs2Config[]>("discover_cs2_configs"),
+  cfgProfiles: () => invoke<CfgProfile[]>("list_cfg_profiles"),
+  createCfgProfile: (name:string,fileName:string,content="") => invoke<CfgProfile>("create_cfg_profile",{name,fileName,content}),
+  importCfgProfile: (path:string) => invoke<CfgProfile>("import_cfg_profile",{path}),
+  saveCfgProfile: (id:string,name:string,content:string) => invoke<void>("save_cfg_profile",{id,name,content}),
+  deleteCfgProfile: (id:string) => invoke<void>("delete_cfg_profile",{id}),
+  cfgAssignments: () => invoke<AccountCfgAssignment[]>("list_cfg_assignments"),
+  assignCfgProfile: (steamAccountId:string,profileId?:string) => invoke<void>("assign_cfg_profile",{steamAccountId,profileId:profileId||null}),
+  cfgVersions: (profileId:string) => invoke<CfgProfileVersion[]>("list_cfg_versions",{profileId}),
+  restoreCfgVersion: (profileId:string,versionId:string) => invoke<string>("restore_cfg_version",{profileId,versionId}),
+  cs2RuntimeFiles: () => invoke<Cs2RuntimeFile[]>("list_cs2_runtime_files"),
+  previewCs2RuntimeFile: (path:string) => invoke<string>("preview_cs2_runtime_file",{path}),
+  softwareStatuses: () => invoke<SoftwareStatus[]>("list_software_statuses"),
+  downloadProgress: () => invoke<DownloadProgress[]>("list_download_progress"),
+  startSoftwareDownload: (code:string) => invoke<void>("start_software_download",{code}),
   savePlatformApp: (app:PlatformApp) => invoke<void>("save_platform_app", { app }),
   exportData: (includeSettings:boolean) => invoke<Record<string,unknown>>("export_data", { includeSettings }),
   previewImport: (data:unknown) => invoke<ImportPreview>("preview_import", { data }),

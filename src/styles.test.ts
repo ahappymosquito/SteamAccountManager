@@ -1,4 +1,4 @@
-/** Static accessibility and responsive contract checks for the four theme styles. */
+/** Static accessibility and responsive contract checks for all six theme styles. */
 // @vitest-environment node
 // @ts-expect-error The production TypeScript graph intentionally omits Node types; Vitest provides this built-in at runtime.
 import { readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
 
 describe("theme and layout contracts", () => {
   it("defines all themes with focus visibility", () => {
-    for (const theme of ["aurora", "violet", "mint", "glacier"]) expect(css).toContain(`data-theme="${theme}"`);
+    for (const theme of ["aurora", "violet", "mint", "glacier", "daylight", "lilac"]) expect(css).toContain(`data-theme="${theme}"`);
     expect(css).toContain(":focus-visible");
   });
 

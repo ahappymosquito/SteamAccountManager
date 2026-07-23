@@ -1,7 +1,9 @@
 //! Tauri application composition and validated IPC command surface.
+mod cs2;
 mod database;
 mod error;
 mod models;
+mod software;
 mod steam;
 
 use crate::database::{validate_steam_id, Database};
@@ -16,10 +18,13 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
 
 pub struct AppState {
@@ -28,6 +33,7 @@ pub struct AppState {
     switch_lock: AtomicBool,
     launch_lock: Mutex<()>,
     login_sessions: Mutex<BTreeMap<String, LoginSessionRecord>>,
+    downloads: Arc<Mutex<BTreeMap<String, DownloadProgress>>>,
 }
 
 #[derive(Clone)]
@@ -281,6 +287,8 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
             .and_then(|value| serde_json::from_str::<u64>(&value).ok())
             .unwrap_or(20)
             .clamp(5, 120);
+        steam::shutdown(&dir, shutdown_timeout)?;
+        cs2::prepare_for_switch(&state.db, &state.data_dir, &dir, &steam_id64)?;
         steam::switch(
             &dir,
             &backup,
@@ -353,9 +361,9 @@ fn set_setting(state: State<AppState>, key: String, value: Value) -> AppResult<(
         return Err(AppError::new("SETTING_NOT_ALLOWED", "不允许修改该设置"));
     }
     if key == "theme"
-        && !value
-            .as_str()
-            .is_some_and(|theme| ["aurora", "violet", "mint", "glacier"].contains(&theme))
+        && !value.as_str().is_some_and(|theme| {
+            ["aurora", "violet", "mint", "glacier", "daylight", "lilac"].contains(&theme)
+        })
     {
         return Err(AppError::new("SETTING_INVALID", "界面主题无效"));
     }
@@ -428,6 +436,250 @@ fn discover_platform_apps() -> AppResult<Vec<PlatformApp>> {
 #[tauri::command]
 fn discover_cs2_configs(state: State<AppState>) -> AppResult<Vec<Cs2Config>> {
     steam::discover_cs2_configs(&steam_path(&state)?)
+}
+
+#[tauri::command]
+fn list_cfg_profiles(state: State<AppState>) -> AppResult<Vec<CfgProfile>> {
+    state.db.list_cfg_profiles()
+}
+
+#[tauri::command]
+fn create_cfg_profile(
+    state: State<AppState>,
+    name: String,
+    file_name: String,
+    content: String,
+) -> AppResult<CfgProfile> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 80 {
+        return Err(AppError::new(
+            "CFG_NAME_INVALID",
+            "cfg 方案名称不能为空或超过 80 字符",
+        ));
+    }
+    let file_name = cs2::validate_cfg_file_name(&file_name)?;
+    let profile = state.db.create_cfg_profile(name, &file_name, &content)?;
+    if let Err(error) = cs2::write_managed_profile(&state.data_dir, &profile) {
+        let _ = state.db.delete_cfg_profile(&profile.id);
+        return Err(error);
+    }
+    Ok(profile)
+}
+
+#[tauri::command]
+fn import_cfg_profile(state: State<AppState>, path: String) -> AppResult<CfgProfile> {
+    let path = PathBuf::from(path);
+    if !path.is_file() || fs::metadata(&path)?.len() > 2 * 1024 * 1024 {
+        return Err(AppError::new(
+            "CFG_IMPORT_INVALID",
+            "请选择不超过 2 MB 的 cfg 文件",
+        ));
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| AppError::new("CFG_IMPORT_INVALID", "cfg 文件名无效"))?;
+    let file_name = cs2::validate_cfg_file_name(file_name)?;
+    let name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("导入配置");
+    let content = fs::read_to_string(&path)
+        .map_err(|_| AppError::new("CFG_IMPORT_ENCODING", "cfg 文件不是有效 UTF-8 文本"))?;
+    create_cfg_profile(state, name.to_string(), file_name, content)
+}
+
+#[tauri::command]
+fn save_cfg_profile(
+    state: State<AppState>,
+    id: String,
+    name: String,
+    content: String,
+) -> AppResult<()> {
+    if content.len() > 2 * 1024 * 1024 {
+        return Err(AppError::new("CFG_TOO_LARGE", "cfg 内容不能超过 2 MB"));
+    }
+    state.db.save_cfg_profile(&id, name.trim(), &content)?;
+    let profile = state
+        .db
+        .list_cfg_profiles()?
+        .into_iter()
+        .find(|profile| profile.id == id)
+        .ok_or_else(|| AppError::new("CFG_PROFILE_NOT_FOUND", "找不到该 cfg 方案"))?;
+    cs2::write_managed_profile(&state.data_dir, &profile)
+}
+
+#[tauri::command]
+fn delete_cfg_profile(state: State<AppState>, id: String) -> AppResult<()> {
+    if let Some(profile) = state
+        .db
+        .list_cfg_profiles()?
+        .into_iter()
+        .find(|profile| profile.id == id)
+    {
+        let _ = fs::remove_file(cs2::managed_file(&state.data_dir, &profile.file_name));
+    }
+    state.db.delete_cfg_profile(&id)
+}
+
+#[tauri::command]
+fn assign_cfg_profile(
+    state: State<AppState>,
+    steam_account_id: String,
+    profile_id: Option<String>,
+) -> AppResult<()> {
+    if let Some(profile_id) = profile_id.filter(|value| !value.is_empty()) {
+        state.db.assign_cfg_profile(&steam_account_id, &profile_id)
+    } else {
+        state.db.remove_cfg_assignment(&steam_account_id)
+    }
+}
+
+#[tauri::command]
+fn list_cfg_assignments(state: State<AppState>) -> AppResult<Vec<AccountCfgAssignment>> {
+    state.db.list_cfg_assignments()
+}
+
+#[tauri::command]
+fn list_cfg_versions(
+    state: State<AppState>,
+    profile_id: String,
+) -> AppResult<Vec<CfgProfileVersion>> {
+    state.db.list_cfg_versions(&profile_id)
+}
+
+#[tauri::command]
+fn restore_cfg_version(
+    state: State<AppState>,
+    profile_id: String,
+    version_id: String,
+) -> AppResult<String> {
+    state.db.restore_cfg_version(&profile_id, &version_id)
+}
+
+#[tauri::command]
+fn list_cs2_runtime_files(state: State<AppState>) -> AppResult<Vec<Cs2RuntimeFile>> {
+    cs2::list_runtime_files(&steam_path(&state)?)
+}
+
+#[tauri::command]
+fn preview_cs2_runtime_file(state: State<AppState>, path: String) -> AppResult<String> {
+    cs2::preview_runtime_file(&steam_path(&state)?, Path::new(&path))
+}
+
+#[tauri::command]
+fn list_software_statuses(state: State<AppState>) -> AppResult<Vec<SoftwareStatus>> {
+    let configured = state.db.list_platform_apps()?;
+    let discovered = steam::discover_platform_apps()?;
+    let platform = |code: &str, name: &str, official_url: &str, download_mode: &str| {
+        let path = configured
+            .iter()
+            .chain(discovered.iter())
+            .find(|app| app.platform_code == code && Path::new(&app.executable_path).is_file())
+            .map(|app| app.executable_path.clone());
+        SoftwareStatus {
+            code: code.to_string(),
+            name: name.to_string(),
+            installed: path.is_some(),
+            executable_path: path,
+            download_mode: download_mode.to_string(),
+            official_url: official_url.to_string(),
+        }
+    };
+    let teamspeak = software::discover_teamspeak();
+    Ok(vec![
+        platform(
+            "perfectworld",
+            "完美世界竞技平台",
+            software::PERFECT_DOWNLOAD_PAGE,
+            "managed",
+        ),
+        platform(
+            "5e",
+            "5E 对战平台",
+            software::FIVE_E_DOWNLOAD_PAGE,
+            "browser_fallback",
+        ),
+        SoftwareStatus {
+            code: "teamspeak3".to_string(),
+            name: "TeamSpeak 3".to_string(),
+            installed: teamspeak.is_some(),
+            executable_path: teamspeak.map(|path| path.to_string_lossy().into_owned()),
+            download_mode: "managed".to_string(),
+            official_url: software::TEAMSPEAK_DOWNLOAD_PAGE.to_string(),
+        },
+    ])
+}
+
+#[tauri::command]
+fn list_download_progress(state: State<AppState>) -> Vec<DownloadProgress> {
+    state.downloads.lock().values().cloned().collect()
+}
+
+#[tauri::command]
+fn start_software_download(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    code: String,
+) -> AppResult<()> {
+    if code == "5e" {
+        return Err(AppError::new(
+            "DOWNLOAD_BROWSER_REQUIRED",
+            "5E 官方下载需要在浏览器中完成安全验证",
+        )
+        .detail(software::FIVE_E_DOWNLOAD_PAGE));
+    }
+    if !["perfectworld", "teamspeak3"].contains(&code.as_str()) {
+        return Err(AppError::new("SOFTWARE_NOT_SUPPORTED", "不支持该软件下载"));
+    }
+    let downloads = Arc::clone(&state.downloads);
+    if downloads
+        .lock()
+        .get(&code)
+        .is_some_and(|progress| matches!(progress.state.as_str(), "downloading" | "installing"))
+    {
+        return Err(AppError::new(
+            "DOWNLOAD_IN_PROGRESS",
+            "该软件正在下载或安装",
+        ));
+    }
+    let initial = DownloadProgress {
+        code: code.clone(),
+        state: "starting".to_string(),
+        downloaded: 0,
+        total: None,
+        message: None,
+    };
+    downloads.lock().insert(code.clone(), initial.clone());
+    let _ = app.emit("software-download-progress", &initial);
+    let directory = state.data_dir.join("downloads");
+    std::thread::spawn(move || {
+        let result = software::download_and_install(&code, &directory, |progress| {
+            downloads.lock().insert(code.clone(), progress.clone());
+            let _ = app.emit("software-download-progress", &progress);
+        });
+        let final_progress = match result {
+            Ok(()) => DownloadProgress {
+                code: code.clone(),
+                state: "completed".to_string(),
+                downloaded: 0,
+                total: None,
+                message: Some("安装程序已结束，安装包已删除".to_string()),
+            },
+            Err(error) => DownloadProgress {
+                code: code.clone(),
+                state: "failed".to_string(),
+                downloaded: 0,
+                total: None,
+                message: Some(error.message),
+            },
+        };
+        downloads
+            .lock()
+            .insert(code.clone(), final_progress.clone());
+        let _ = app.emit("software-download-progress", &final_progress);
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -648,6 +900,7 @@ pub fn run() {
                 switch_lock: AtomicBool::new(false),
                 launch_lock: Mutex::new(()),
                 login_sessions: Mutex::new(BTreeMap::new()),
+                downloads: Arc::new(Mutex::new(BTreeMap::new())),
             });
             Ok(())
         })
@@ -675,6 +928,20 @@ pub fn run() {
             list_platform_apps,
             discover_platform_apps,
             discover_cs2_configs,
+            list_cfg_profiles,
+            create_cfg_profile,
+            import_cfg_profile,
+            save_cfg_profile,
+            delete_cfg_profile,
+            assign_cfg_profile,
+            list_cfg_assignments,
+            list_cfg_versions,
+            restore_cfg_version,
+            list_cs2_runtime_files,
+            preview_cs2_runtime_file,
+            list_software_statuses,
+            list_download_progress,
+            start_software_download,
             launch_platform,
             export_data,
             preview_import,

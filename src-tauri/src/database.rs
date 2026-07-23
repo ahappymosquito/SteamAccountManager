@@ -1,8 +1,8 @@
 //! SQLite migrations and transactional repositories for application data.
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    Account, LocalSteamAccount, PlatformApp, PlatformLink, PlatformLinkInput, ProfileInput,
-    TagOption,
+    Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, LocalSteamAccount, PlatformApp,
+    PlatformLink, PlatformLinkInput, ProfileInput, TagOption,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -11,6 +11,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub struct Database(pub Mutex<Connection>);
+pub type AssignedCfg = (String, String, String, Option<String>);
 
 impl Database {
     pub fn open(path: &Path) -> AppResult<Self> {
@@ -315,6 +316,194 @@ impl Database {
             params![Utc::now().to_rfc3339(), steam_id],
         )?;
         Ok(())
+    }
+
+    pub fn list_cfg_profiles(&self) -> AppResult<Vec<CfgProfile>> {
+        let conn = self.0.lock();
+        let mut statement = conn.prepare(
+            "SELECT id,name,file_name,content,created_at,updated_at FROM cfg_profiles ORDER BY name COLLATE NOCASE",
+        )?;
+        let profiles = statement
+            .query_map([], |row| {
+                Ok(CfgProfile {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    file_name: row.get(2)?,
+                    content: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(profiles)
+    }
+
+    pub fn create_cfg_profile(
+        &self,
+        name: &str,
+        file_name: &str,
+        content: &str,
+    ) -> AppResult<CfgProfile> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.0.lock().execute(
+            "INSERT INTO cfg_profiles(id,name,file_name,content,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)",
+            params![id, name, file_name, content, now],
+        )?;
+        Ok(CfgProfile {
+            id,
+            name: name.to_string(),
+            file_name: file_name.to_string(),
+            content: content.to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
+    pub fn save_cfg_profile(&self, id: &str, name: &str, content: &str) -> AppResult<()> {
+        let mut conn = self.0.lock();
+        let tx = conn.transaction()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT content FROM cfg_profiles WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let previous = previous
+            .ok_or_else(|| AppError::new("CFG_PROFILE_NOT_FOUND", "找不到该 CS2 cfg 方案"))?;
+        let now = Utc::now().to_rfc3339();
+        if previous != content {
+            tx.execute(
+                "INSERT INTO cfg_profile_versions(id,profile_id,content,created_at) VALUES(?1,?2,?3,?4)",
+                params![Uuid::new_v4().to_string(), id, previous, now],
+            )?;
+            tx.execute(
+                "DELETE FROM cfg_profile_versions WHERE profile_id=?1 AND id NOT IN (SELECT id FROM cfg_profile_versions WHERE profile_id=?1 ORDER BY created_at DESC LIMIT 10)",
+                [id],
+            )?;
+        }
+        tx.execute(
+            "UPDATE cfg_profiles SET name=?1,content=?2,updated_at=?3 WHERE id=?4",
+            params![name, content, now, id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_cfg_profile(&self, id: &str) -> AppResult<()> {
+        self.0
+            .lock()
+            .execute("DELETE FROM cfg_profiles WHERE id=?1", [id])?;
+        Ok(())
+    }
+
+    pub fn assign_cfg_profile(&self, steam_account_id: &str, profile_id: &str) -> AppResult<()> {
+        let conn = self.0.lock();
+        let account_exists = conn
+            .query_row(
+                "SELECT 1 FROM steam_accounts WHERE id=?1",
+                [steam_account_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        let profile_exists = conn
+            .query_row(
+                "SELECT 1 FROM cfg_profiles WHERE id=?1",
+                [profile_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !account_exists || !profile_exists {
+            return Err(AppError::new(
+                "CFG_ASSIGNMENT_INVALID",
+                "账号或 cfg 方案不存在",
+            ));
+        }
+        conn.execute(
+            "INSERT INTO account_cfg_profiles(steam_account_id,profile_id,updated_at) VALUES(?1,?2,?3) ON CONFLICT(steam_account_id) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at",
+            params![steam_account_id, profile_id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_cfg_assignment(&self, steam_account_id: &str) -> AppResult<()> {
+        self.0.lock().execute(
+            "DELETE FROM account_cfg_profiles WHERE steam_account_id=?1",
+            [steam_account_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_cfg_assignments(&self) -> AppResult<Vec<AccountCfgAssignment>> {
+        let conn = self.0.lock();
+        let mut statement = conn.prepare(
+            "SELECT a.id,a.steam_id64,p.id,p.name,p.file_name FROM account_cfg_profiles x JOIN steam_accounts a ON a.id=x.steam_account_id JOIN cfg_profiles p ON p.id=x.profile_id ORDER BY a.persona_name COLLATE NOCASE,a.account_name COLLATE NOCASE",
+        )?;
+        let assignments = statement
+            .query_map([], |row| {
+                Ok(AccountCfgAssignment {
+                    steam_account_id: row.get(0)?,
+                    steam_id64: row.get(1)?,
+                    profile_id: row.get(2)?,
+                    profile_name: row.get(3)?,
+                    file_name: row.get(4)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(assignments)
+    }
+
+    pub fn cfg_for_steam_id(&self, steam_id64: &str) -> AppResult<Option<AssignedCfg>> {
+        Ok(self
+            .0
+            .lock()
+            .query_row(
+                "SELECT p.id,p.file_name,p.content,x.last_applied_file FROM account_cfg_profiles x JOIN steam_accounts a ON a.id=x.steam_account_id JOIN cfg_profiles p ON p.id=x.profile_id WHERE a.steam_id64=?1",
+                [steam_id64],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn mark_cfg_applied(&self, steam_id64: &str, file_name: &str) -> AppResult<()> {
+        self.0.lock().execute(
+            "UPDATE account_cfg_profiles SET last_applied_file=?1,updated_at=?2 WHERE steam_account_id=(SELECT id FROM steam_accounts WHERE steam_id64=?3)",
+            params![file_name, Utc::now().to_rfc3339(), steam_id64],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_cfg_versions(&self, profile_id: &str) -> AppResult<Vec<CfgProfileVersion>> {
+        let conn = self.0.lock();
+        let mut statement = conn.prepare(
+            "SELECT id,profile_id,created_at FROM cfg_profile_versions WHERE profile_id=?1 ORDER BY created_at DESC",
+        )?;
+        let versions = statement
+            .query_map([profile_id], |row| {
+                Ok(CfgProfileVersion {
+                    id: row.get(0)?,
+                    profile_id: row.get(1)?,
+                    created_at: row.get(2)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(versions)
+    }
+
+    pub fn restore_cfg_version(&self, profile_id: &str, version_id: &str) -> AppResult<String> {
+        let conn = self.0.lock();
+        let content: String = conn
+            .query_row(
+                "SELECT content FROM cfg_profile_versions WHERE id=?1 AND profile_id=?2",
+                params![version_id, profile_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::new("CFG_VERSION_NOT_FOUND", "找不到该历史版本"))?;
+        Ok(content)
     }
 }
 

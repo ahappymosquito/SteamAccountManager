@@ -1,12 +1,18 @@
 /** Shared frontend models matching the validated Tauri command payloads. */
 export type PlatformCode = "perfectworld"|"5e"|"faceit"|"other";
-export type Theme = "aurora"|"violet"|"mint"|"glacier";
+export type Theme = "aurora"|"violet"|"mint"|"glacier"|"daylight"|"lilac";
 export type Account = { id:string; steamId64:string; accountName?:string; personaName?:string; lastLocalSeenAt?:string; lastSwitchedAt?:string; createdAt:string; updatedAt:string; alias?:string; remark?:string; groupName?:string; favorite:boolean; tags:string[]; platformCodes:PlatformCode[]; avatarPath?:string };
 export type ProfileInput = { accountId:string; alias?:string; remark?:string; favorite:boolean; tags:string[] };
 export type TagOption = { name:string; usageCount:number };
 export type PlatformLink = { id:string; steamAccountId:string; platformCode:string; externalId?:string; displayName?:string; profileUrl?:string; remark?:string; status:"unverified"|"user_confirmed"|"invalid"; lastVerifiedAt?:string };
 export type PlatformApp = { platformCode:PlatformCode; name:string; executablePath:string; arguments:string[]; workingDirectory?:string; prelaunchCheck:boolean };
 export type Cs2Config = { steamId64:string; path:string; fileCount:number };
+export type CfgProfile = { id:string; name:string; fileName:string; content:string; createdAt:string; updatedAt:string };
+export type CfgProfileVersion = { id:string; profileId:string; createdAt:string };
+export type AccountCfgAssignment = { steamAccountId:string; steamId64:string; profileId:string; profileName:string; fileName:string };
+export type Cs2RuntimeFile = { steamId64:string; path:string; name:string; size:number; modifiedAt?:string; editable:boolean };
+export type SoftwareStatus = { code:"perfectworld"|"5e"|"teamspeak3"; name:string; installed:boolean; executablePath?:string; downloadMode:"managed"|"browser_fallback"; officialUrl:string };
+export type DownloadProgress = { code:string; state:"starting"|"downloading"|"installing"|"completed"|"failed"; downloaded:number; total?:number; message?:string };
 export type CurrentStatus = { kind:"locally_confirmed"|"inferred"|"steam_not_running"|"unknown"; accountName?:string; steamId64?:string; steamRunning:boolean };
 export type StartupSteamResult = { steamPath?:string; scanPerformed:boolean; accountCount:number; platformCount:number };
 export type SwitchLog = { id:string; steamAccountId?:string; accountName?:string; startedAt:string; finishedAt?:string; result:string; errorMessage?:string };

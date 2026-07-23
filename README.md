@@ -1,5 +1,15 @@
 # Steam Account Manager
 
+## 0.3.2 CS2 配置、平台软件与统一主题
+
+- 新增独立“CS2 配置”页：可新建或导入多个 `.cfg` 方案、500 ms 自动保存、查看界面备注与最近历史，并为每个 Steam 账号选择要使用的方案。
+- 切换账号前先把所选 CFG 复制到当前 CS2 安装目录并执行 SHA-256 校验，再无损合并该账号的 `+exec xxx.cfg` 启动参数；任一步失败都会中止切换并显示原因。
+- 新增只读的 CS2 运行时配置预览，避免直接编辑可能被 Steam/CS2 回写的生成文件。官方资料整理见 `docs/cs2-configuration-files-official-research.md`。
+- 新增独立“平台”页：集中检测完美世界、5E 与 TeamSpeak 3，完美世界和 TeamSpeak 3 支持官方下载进度、启动官方安装向导及退出后删除安装包；5E 因官网安全验证改用浏览器下载。
+- 平台页的账号关联与 Steam 账号详情使用同一数据库来源；关联只在账号详情编辑，平台页同步汇总。
+- 原生边框替换为主题适配标题栏，右侧画板按钮提供三套浅色、三套夜间主题；Steam 运行状态移回账号页。
+- 备份、JSON 导入导出收纳到设置页底部折叠的“高级与恢复”区域。
+
 ## 0.3.1 平台与 CS2 cfg 一键检测
 
 - 设置页新增“一键检测并配置”，显示完美世界、5E 启动程序及各 Steam 账号的 CS2 cfg 检测结果。
@@ -53,7 +63,8 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 - 正确显示和搜索 UTF-8 中文登录名与个人昵称
 - 管理别名、备注、收藏、标签和平台关联，并使用多标签精确筛选
 - 通过 Steam 官方登录窗口添加账号，只展示已勾选“记住我”的账号
-- 启动时自动检测完美世界竞技平台和 5E 客户端；切换 Steam 账号后自动重启已检测/配置的平台客户端
+- 独立管理完美世界、5E 与 TeamSpeak 3 的安装检测和官方下载
+- 管理多个 CS2 CFG 方案，并按 Steam 账号在切换前复制、校验和更新 `+exec` 启动参数
 - 手工关联完美世界、5E、FACEIT 或其他平台账号
 - 在明确确认后关闭 Steam、备份配置、切换账号并重新启动
 - 判断本地确认、当前推测、Steam 未运行和未知状态
@@ -124,6 +135,8 @@ git push origin v0.1.3
 应用通过 Tauri 的 `app_data_dir` 获取用户数据目录，通常位于 `%APPDATA%\com.steamaccountmanager.desktop\`。其中包含：
 
 - `steam-account-manager.db`：SQLite 账号资料、设置和切换日志
+- `cfg-library\`：应用管理的简洁 CFG 主文件
+- `downloads\`：平台官方安装包临时目录；安装向导退出后自动删除安装包
 - `backups\`：修改前的 VDF 与元数据备份，默认保留最近 10 次
 
 应用不把数据库或备份放入 Steam 安装目录。
@@ -134,7 +147,7 @@ git push origin v0.1.3
 
 ## 账号切换原理
 
-切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出、创建备份，将目标账号设置为 `MostRecent=1` 和 `AllowAutoLogin=1`，写入注册表 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam。缺失字段会无损插入，其他账号和未知 VDF 字段保持不变。正常退出超时不会默认强制结束 `steamservice.exe`。
+切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出；若账号选择了 CFG，则先复制到 CS2 的 `game\csgo\cfg` 并校验 SHA-256，再只替换本应用此前管理的 `+exec` 参数，保留其他启动参数。通过后才创建安全备份，将目标账号设置为 `MostRecent=1` 和 `AllowAutoLogin=1`，写入注册表 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam。任一 CFG 或启动参数检查失败都会中止账号切换并记录具体原因。
 
 应用会在写入后以及 Steam 稳定启动后重新检查 VDF 和注册表。只有目标账号仍为唯一的最近账号、已记住密码并允许自动登录时才记录切换成功；如果 Steam 回写或清除了这些状态，应用会提示在官方客户端重新登录并勾选“记住我”。
 

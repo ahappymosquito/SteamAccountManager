@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 import type { PlatformCode } from "./lib/types";
 
-export type Page = "accounts"|"logs"|"settings";
+export type Page = "accounts"|"cs2"|"platforms"|"logs"|"settings";
 export type PlatformFilter = ""|PlatformCode|"unlinked";
 type Notice = { kind:"success"|"error"; text:string } | null;
 type UiState = { page:Page; query:string; favoriteOnly:boolean; platform:PlatformFilter; selectedTags:string[]; selectedId?:string; notice:Notice; setPage:(page:Page)=>void; setQuery:(query:string)=>void; setFavoriteOnly:(value:boolean)=>void; setPlatform:(value:PlatformFilter)=>void; setSelectedTags:(value:string[])=>void; select:(id?:string)=>void; notify:(notice:Notice)=>void };

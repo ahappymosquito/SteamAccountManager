@@ -197,6 +197,93 @@ fn text<'a>(entries: &'a [Entry], key: &str) -> Option<&'a str> {
             _ => None,
         })
 }
+
+fn object<'a>(entries: &'a [Entry], key: &str) -> Option<(&'a [Entry], usize)> {
+    entries
+        .iter()
+        .find(|entry| entry.key.eq_ignore_ascii_case(key))
+        .and_then(|entry| match &entry.value {
+            Value::Object {
+                entries,
+                close_start,
+            } => Some((entries.as_slice(), *close_start)),
+            _ => None,
+        })
+}
+
+fn escaped_vdf_text(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn merge_exec_option(existing: &str, previous_file: Option<&str>, file_name: &str) -> String {
+    let mut tokens = existing
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if let Some(previous) = previous_file {
+        let mut index = 0;
+        while index < tokens.len() {
+            if tokens[index].eq_ignore_ascii_case("+exec")
+                && tokens
+                    .get(index + 1)
+                    .is_some_and(|value| value.trim_matches('"').eq_ignore_ascii_case(previous))
+            {
+                tokens.drain(index..=(index + 1));
+                continue;
+            }
+            index += 1;
+        }
+    }
+    let already_present = tokens.windows(2).any(|pair| {
+        pair[0].eq_ignore_ascii_case("+exec")
+            && pair[1].trim_matches('"').eq_ignore_ascii_case(file_name)
+    });
+    if !already_present {
+        tokens.push("+exec".to_string());
+        tokens.push(file_name.to_string());
+    }
+    tokens.join(" ")
+}
+
+pub fn patch_cs2_launch_options(
+    input: &str,
+    previous_file: Option<&str>,
+    file_name: &str,
+) -> AppResult<String> {
+    let parsed = root(input)?;
+    let (store, _) = object(&parsed, "UserLocalConfigStore")
+        .ok_or_else(|| AppError::new("STEAM_LOCALCONFIG_INVALID", "缺少 UserLocalConfigStore"))?;
+    let (software, _) = object(store, "Software")
+        .ok_or_else(|| AppError::new("STEAM_LOCALCONFIG_INVALID", "缺少 Software 节点"))?;
+    let (valve, _) = object(software, "Valve")
+        .ok_or_else(|| AppError::new("STEAM_LOCALCONFIG_INVALID", "缺少 Valve 节点"))?;
+    let (steam, _) = object(valve, "Steam")
+        .ok_or_else(|| AppError::new("STEAM_LOCALCONFIG_INVALID", "缺少 Steam 节点"))?;
+    let (apps, _) = object(steam, "apps")
+        .ok_or_else(|| AppError::new("STEAM_LOCALCONFIG_INVALID", "缺少 apps 节点"))?;
+    let (cs2, close_start) = object(apps, "730").ok_or_else(|| {
+        AppError::new("CS2_LAUNCH_OPTIONS_MISSING", "Steam 尚未生成 CS2 启动配置")
+    })?;
+    let merged = merge_exec_option(
+        text(cs2, "LaunchOptions").unwrap_or_default(),
+        previous_file,
+        file_name,
+    );
+    let escaped = escaped_vdf_text(&merged);
+    let mut output = input.to_string();
+    if let Some(Value::Text { start, end, .. }) = cs2
+        .iter()
+        .find(|entry| entry.key.eq_ignore_ascii_case("LaunchOptions"))
+        .map(|entry| &entry.value)
+    {
+        output.replace_range(*start..*end, &escaped);
+    } else {
+        let (position, insertion) =
+            insertion_edit(input, close_start, &[("LaunchOptions", escaped.as_str())]);
+        output.insert_str(position, &insertion);
+    }
+    Ok(output)
+}
 fn users(entries: &[Entry]) -> AppResult<&[Entry]> {
     entries
         .iter()
@@ -400,6 +487,22 @@ mod tests {
         let accounts = parse_loginusers(&output).expect("parse patched Unicode VDF");
         assert_eq!(accounts[0].persona_name.as_deref(), Some("中文玩家"));
         assert!(accounts[1].most_recent);
+    }
+
+    #[test]
+    fn merges_cs2_exec_without_overwriting_other_launch_options() {
+        let input = "\"UserLocalConfigStore\" { \"Software\" { \"Valve\" { \"Steam\" { \"apps\" { \"730\" { \"LaunchOptions\" \"-novid +exec old.cfg -console\" } } } } } }";
+        let output =
+            patch_cs2_launch_options(input, Some("old.cfg"), "new.cfg").expect("patch options");
+        assert!(output.contains("-novid -console +exec new.cfg"));
+        assert!(!output.contains("old.cfg"));
+    }
+
+    #[test]
+    fn inserts_missing_cs2_launch_options() {
+        let input = "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"apps\"\n\t\t\t\t{\n\t\t\t\t\t\"730\"\n\t\t\t\t\t{\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}";
+        let output = patch_cs2_launch_options(input, None, "practice.cfg").expect("insert options");
+        assert!(output.contains("\"LaunchOptions\"\t\t\"+exec practice.cfg\""));
     }
 
     #[test]

@@ -148,6 +148,67 @@ pub struct Cs2Config {
     pub file_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CfgProfile {
+    pub id: String,
+    pub name: String,
+    pub file_name: String,
+    pub content: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CfgProfileVersion {
+    pub id: String,
+    pub profile_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountCfgAssignment {
+    pub steam_account_id: String,
+    pub steam_id64: String,
+    pub profile_id: String,
+    pub profile_name: String,
+    pub file_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Cs2RuntimeFile {
+    pub steam_id64: String,
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub modified_at: Option<String>,
+    pub editable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SoftwareStatus {
+    pub code: String,
+    pub name: String,
+    pub installed: bool,
+    pub executable_path: Option<String>,
+    pub download_mode: String,
+    pub official_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgress {
+    pub code: String,
+    pub state: String,
+    pub downloaded: u64,
+    pub total: Option<u64>,
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SwitchLog {

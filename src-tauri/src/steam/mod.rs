@@ -687,7 +687,7 @@ fn atomic_write_with(
     result
 }
 
-fn atomic_write(path: &Path, content: &str) -> AppResult<()> {
+pub(crate) fn atomic_write_text(path: &Path, content: &str) -> AppResult<()> {
     #[cfg(windows)]
     {
         atomic_write_with(path, content, replace_windows)
@@ -879,26 +879,11 @@ pub fn switch(
         .account_name
         .clone()
         .ok_or_else(|| AppError::new("ACCOUNT_NAME_MISSING", "目标账号缺少 Steam 登录名"))?;
-    if is_running() {
-        Command::new(dir.join("steam.exe"))
-            .arg("-shutdown")
-            .spawn()
-            .map_err(|_| AppError::new("STEAM_SHUTDOWN_FAILED", "无法请求 Steam 正常退出"))?;
-        let start = Instant::now();
-        while is_running() {
-            if start.elapsed() > Duration::from_secs(shutdown_timeout) {
-                return Err(
-                    AppError::new("STEAM_SHUTDOWN_TIMEOUT", "Steam 未在限定时间内退出")
-                        .detail("wait_or_force"),
-                );
-            }
-            thread::sleep(Duration::from_millis(500));
-        }
-    }
+    shutdown(dir, shutdown_timeout)?;
     let folder = backup(dir, backup_root, target)?;
     let patched = vdf::patch_auto_login(&original, target)?;
     if let Err(err) = (|| {
-        atomic_write(&path, &patched)?;
+        atomic_write_text(&path, &patched)?;
         set_registry(&name)?;
         verify_auto_login_state(dir, target, &name)?;
         Ok::<(), AppError>(())
@@ -910,6 +895,27 @@ pub fn switch(
         .spawn()
         .map_err(|_| AppError::new("STEAM_START_FAILED", "设置已完成，但无法启动 Steam"))?;
     wait_for_stable_auto_login(dir, target, &name, startup_timeout)?;
+    Ok(())
+}
+
+pub fn shutdown(dir: &Path, shutdown_timeout: u64) -> AppResult<()> {
+    if !is_running() {
+        return Ok(());
+    }
+    Command::new(dir.join("steam.exe"))
+        .arg("-shutdown")
+        .spawn()
+        .map_err(|_| AppError::new("STEAM_SHUTDOWN_FAILED", "无法请求 Steam 正常退出"))?;
+    let start = Instant::now();
+    while is_running() {
+        if start.elapsed() > Duration::from_secs(shutdown_timeout) {
+            return Err(
+                AppError::new("STEAM_SHUTDOWN_TIMEOUT", "Steam 未在限定时间内退出")
+                    .detail("wait_or_force"),
+            );
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
     Ok(())
 }
 
@@ -941,7 +947,7 @@ pub fn begin_official_login(
     let folder = backup(dir, backup_root, "official-login")?;
     let patched = vdf::patch_login_prompt(&original)?;
     let result = (|| {
-        atomic_write(&path, &patched)?;
+        atomic_write_text(&path, &patched)?;
         set_registry_login_state("", 0)?;
         Command::new(dir.join("steam.exe"))
             .spawn()
@@ -1278,7 +1284,7 @@ mod atomic_write_tests {
         let path = directory.path().join("loginusers.vdf");
         fs::write(&path, "old").expect("write original");
 
-        atomic_write(&path, "new").expect("atomic replacement");
+        atomic_write_text(&path, "new").expect("atomic replacement");
 
         assert_eq!(fs::read_to_string(&path).expect("read result"), "new");
         assert!(temporary_files(directory.path()).is_empty());
@@ -1333,7 +1339,7 @@ mod atomic_write_tests {
             .open(&path)
             .expect("exclusive lock");
 
-        let error = atomic_write(&path, "replacement").expect_err("file must be busy");
+        let error = atomic_write_text(&path, "replacement").expect_err("file must be busy");
 
         assert_eq!(error.code, "STEAM_CONFIG_BUSY");
         drop(lock);
