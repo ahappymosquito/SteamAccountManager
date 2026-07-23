@@ -15,7 +15,17 @@ export function applyTheme(theme:Theme){
   localStorage.setItem("sam-theme",theme);
 }
 
-export function savedTheme():Theme{
+export function storedTheme():Theme|undefined{
   const value=localStorage.getItem("sam-theme") as Theme|null;
-  return themes.some(theme=>theme.value===value)?value!:"glacier";
+  return themes.some(theme=>theme.value===value)?value!:undefined;
+}
+
+export function resolveTheme(local:Theme|undefined,configured:unknown):Theme{
+  if(local)return local;
+  const value=String(configured??"") as Theme;
+  return themes.some(theme=>theme.value===value)?value:"glacier";
+}
+
+export function savedTheme():Theme{
+  return storedTheme()??"glacier";
 }

@@ -89,7 +89,7 @@ fn client() -> AppResult<Client> {
     Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(60 * 60))
-        .user_agent("SteamAccountManager/0.3.4")
+        .user_agent("SteamAccountManager/0.3.5")
         .build()
         .map_err(|error| {
             AppError::new("DOWNLOAD_CLIENT_FAILED", "无法初始化下载器").detail(error.to_string())

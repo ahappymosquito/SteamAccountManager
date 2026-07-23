@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { AccountAvatar } from "./components/AccountAvatar";
+import { flushCfgDraft } from "./cfgWorkspace";
 import { AccountDrawer } from "./components/AccountDrawer";
 import { SteamLoginDialog } from "./components/SteamLoginDialog";
 import { SwitchDialog } from "./components/SwitchDialog";
@@ -23,7 +24,7 @@ import { TagFilter } from "./components/TagFilter";
 import { TitleBar } from "./components/TitleBar";
 import { api } from "./lib/api";
 import { filterAccounts } from "./lib/filter";
-import { applyTheme, savedTheme } from "./lib/themes";
+import { applyTheme, resolveTheme, savedTheme, storedTheme } from "./lib/themes";
 import type {
   Account,
   AppError,
@@ -101,17 +102,7 @@ export default function App() {
           notify("error", "未自动检测到 Steam，请在设置中选择安装目录");
         }
         const settings = await api.settings();
-        const configured = String(settings.theme ?? theme) as Theme;
-        const nextTheme = [
-          "aurora",
-          "violet",
-          "mint",
-          "glacier",
-          "daylight",
-          "lilac",
-        ].includes(configured)
-          ? configured
-          : theme;
+        const nextTheme = resolveTheme(storedTheme(), settings.theme);
         setTheme(nextTheme);
         applyTheme(nextTheme);
       } catch (error) {
@@ -164,6 +155,7 @@ export default function App() {
   const performSwitch = async () => {
     if (!switching) return;
     try {
+      await flushCfgDraft();
       await api.switchAccount(switching.steamId64);
       await load();
       notify("success", "启动参数与 CFG 已验证，Steam 账号切换完成");
@@ -298,7 +290,7 @@ export default function App() {
             />
           )}
           {ui.page === "cs2" && (
-            <Cs2Page accounts={accounts} notify={notify} />
+            <Cs2Page notify={notify} />
           )}
           {ui.page === "platforms" && (
             <PlatformsPage accounts={accounts} notify={notify} />

@@ -215,24 +215,19 @@ fn escaped_vdf_text(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn merge_exec_option(existing: &str, previous_file: Option<&str>, file_name: &str) -> String {
+fn merge_exec_option(existing: &str, _previous_file: Option<&str>, file_name: &str) -> String {
     let mut tokens = existing
         .split_whitespace()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    if let Some(previous) = previous_file {
-        let mut index = 0;
-        while index < tokens.len() {
-            if tokens[index].eq_ignore_ascii_case("+exec")
-                && tokens
-                    .get(index + 1)
-                    .is_some_and(|value| value.trim_matches('"').eq_ignore_ascii_case(previous))
-            {
-                tokens.drain(index..=(index + 1));
-                continue;
-            }
-            index += 1;
+    let mut index = 0;
+    while index < tokens.len() {
+        if tokens[index].eq_ignore_ascii_case("+exec") {
+            let end = usize::min(index + 1, tokens.len() - 1);
+            tokens.drain(index..=end);
+            continue;
         }
+        index += 1;
     }
     let already_present = tokens.windows(2).any(|pair| {
         pair[0].eq_ignore_ascii_case("+exec")
@@ -491,11 +486,12 @@ mod tests {
 
     #[test]
     fn merges_cs2_exec_without_overwriting_other_launch_options() {
-        let input = "\"UserLocalConfigStore\" { \"Software\" { \"Valve\" { \"Steam\" { \"apps\" { \"730\" { \"LaunchOptions\" \"-novid +exec old.cfg -console\" } } } } } }";
+        let input = "\"UserLocalConfigStore\" { \"Software\" { \"Valve\" { \"Steam\" { \"apps\" { \"730\" { \"LaunchOptions\" \"-novid +exec old.cfg -console +exec extra.cfg\" } } } } } }";
         let output =
             patch_cs2_launch_options(input, Some("old.cfg"), "new.cfg").expect("patch options");
         assert!(output.contains("-novid -console +exec new.cfg"));
         assert!(!output.contains("old.cfg"));
+        assert!(!output.contains("extra.cfg"));
     }
 
     #[test]

@@ -1,46 +1,438 @@
-/** CS2 cfg profile editor, account assignment, official notes, and runtime previews. */
-import { useEffect,useMemo,useState } from "react";
+/** Focused CS2 CFG workspace with global activation, autosave, and read-only runtime previews. */
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Clock3,FileCode2,FolderOpen,History,Plus,RotateCcw,Trash2 } from "lucide-react";
+import {
+  Clock3,
+  FileCode2,
+  FolderOpen,
+  History,
+  Plus,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
+import { flushCfgDraft, useCfgWorkspace } from "../cfgWorkspace";
 import { api } from "../lib/api";
-import type { Account,AccountCfgAssignment,AppError,CfgProfile,CfgProfileVersion,Cs2RuntimeFile } from "../lib/types";
+import type {
+  AppError,
+  CfgProfile,
+  CfgProfileVersion,
+  Cs2RuntimeFile,
+} from "../lib/types";
 
-const errorMessage=(error:unknown)=>(error as AppError)?.message||"操作失败";
-const commandNotes:Record<string,{description:string;source:string}>={
-  bind:{description:"将按键绑定到命令。包含空格的命令应使用引号。",source:"https://developer.valvesoftware.com/wiki/Bind"},
-  unbind:{description:"移除指定按键的绑定。",source:"https://developer.valvesoftware.com/wiki/Bind"},
-  alias:{description:"为一组控制台命令定义简短名称。",source:"https://developer.valvesoftware.com/wiki/Alias"},
-  exec:{description:"执行另一个 cfg 文件。",source:"https://developer.valvesoftware.com/wiki/Exec"},
-  host_writeconfig:{description:"请求游戏写回带归档标记的设置。",source:"https://developer.valvesoftware.com/wiki/DevMsg"},
-  fps_max:{description:"限制客户端最大帧率；0 通常表示不限制。",source:"https://developer.valvesoftware.com/wiki/List_of_Counter-Strike_2_console_commands_and_variables"},
-  sensitivity:{description:"鼠标灵敏度倍率。",source:"https://developer.valvesoftware.com/wiki/List_of_Counter-Strike_2_console_commands_and_variables"},
-  volume:{description:"游戏主音量。",source:"https://developer.valvesoftware.com/wiki/List_of_Counter-Strike_2_console_commands_and_variables"},
+const errorMessage = (error: unknown) =>
+  (error as AppError)?.message || "操作失败";
+
+const commandNotes: Record<string, { description: string; source: string }> = {
+  bind: {
+    description: "将按键绑定到命令，包含空格的命令应使用引号。",
+    source: "https://developer.valvesoftware.com/wiki/Bind",
+  },
+  unbind: {
+    description: "移除指定按键的绑定。",
+    source: "https://developer.valvesoftware.com/wiki/Bind",
+  },
+  alias: {
+    description: "为一组控制台命令定义简短名称。",
+    source: "https://developer.valvesoftware.com/wiki/Alias",
+  },
+  exec: {
+    description: "执行另一个 CFG 文件。",
+    source: "https://developer.valvesoftware.com/wiki/Exec",
+  },
+  fps_max: {
+    description: "限制客户端最大帧率，0 通常表示不限制。",
+    source:
+      "https://developer.valvesoftware.com/wiki/List_of_Counter-Strike_2_console_commands_and_variables",
+  },
+  sensitivity: {
+    description: "设置鼠标灵敏度倍率。",
+    source:
+      "https://developer.valvesoftware.com/wiki/List_of_Counter-Strike_2_console_commands_and_variables",
+  },
+  volume: {
+    description: "设置游戏主音量。",
+    source:
+      "https://developer.valvesoftware.com/wiki/List_of_Counter-Strike_2_console_commands_and_variables",
+  },
 };
 
-export function Cs2Page({accounts,notify}:{accounts:Account[];notify:(kind:"success"|"error",text:string)=>void}){
-  const[profiles,setProfiles]=useState<CfgProfile[]>([]);const[activeId,setActiveId]=useState<string>();const[name,setName]=useState("");const[content,setContent]=useState("");const[dirty,setDirty]=useState(false);const[assignments,setAssignments]=useState<AccountCfgAssignment[]>([]);const[runtimeFiles,setRuntimeFiles]=useState<Cs2RuntimeFile[]>([]);const[preview,setPreview]=useState<{path:string;content:string}>();const[versions,setVersions]=useState<CfgProfileVersion[]>([]);const[saving,setSaving]=useState(false);
-  const active=profiles.find(profile=>profile.id===activeId);
-  const load=async()=>{const[nextProfiles,nextAssignments,nextRuntime]=await Promise.all([api.cfgProfiles(),api.cfgAssignments(),api.cs2RuntimeFiles().catch(()=>[])]);setProfiles(nextProfiles);setAssignments(nextAssignments);setRuntimeFiles(nextRuntime);if(!activeId&&nextProfiles[0])setActiveId(nextProfiles[0].id)};
-  useEffect(()=>{void load().catch(error=>notify("error",errorMessage(error)))},[]);
-  useEffect(()=>{if(!active)return;setName(active.name);setContent(active.content);setDirty(false);api.cfgVersions(active.id).then(setVersions).catch(()=>setVersions([]))},[activeId,active?.updatedAt]);
-  useEffect(()=>{if(!dirty||!active)return;const timer=window.setTimeout(async()=>{setSaving(true);try{await api.saveCfgProfile(active.id,name,content);setProfiles(items=>items.map(item=>item.id===active.id?{...item,name,content,updatedAt:new Date().toISOString()}:item));setDirty(false)}catch(error){notify("error",errorMessage(error))}finally{setSaving(false)}},500);return()=>window.clearTimeout(timer)},[dirty,name,content,active?.id]);
-  const notes=useMemo(()=>{const seen=new Set<string>();return content.split(/\r?\n/).map(line=>line.trim()).filter(line=>line&&!line.startsWith("//")).map(line=>line.split(/\s+/)[0].toLowerCase()).filter(command=>!seen.has(command)&&Boolean(seen.add(command))).map(command=>({command,note:commandNotes[command]}))},[content]);
-  const create=async()=>{const suffix=Date.now().toString().slice(-6);try{const profile=await api.createCfgProfile(`新配置 ${profiles.length+1}`,`profile-${suffix}.cfg`,"// 在此输入 CS2 控制台命令\n");setProfiles(items=>[...items,profile]);setActiveId(profile.id);notify("success","已创建 cfg 方案")}catch(error){notify("error",errorMessage(error))}};
-  const importFile=async()=>{const path=await open({multiple:false,filters:[{name:"CS2 cfg",extensions:["cfg"]}],title:"导入 CS2 cfg"});if(typeof path!=="string")return;try{const profile=await api.importCfgProfile(path);setProfiles(items=>[...items,profile]);setActiveId(profile.id);notify("success","已复制到 cfg 方案库")}catch(error){notify("error",errorMessage(error))}};
-  const remove=async()=>{if(!active||!confirm(`删除“${active.name}”？账号绑定会同时解除。`))return;try{await api.deleteCfgProfile(active.id);const remaining=profiles.filter(item=>item.id!==active.id);setProfiles(remaining);setActiveId(remaining[0]?.id);await load();notify("success","cfg 方案已删除")}catch(error){notify("error",errorMessage(error))}};
-  const assignmentFor=(accountId:string)=>assignments.find(item=>item.steamAccountId===accountId)?.profileId||"";
-  const assign=async(accountId:string,profileId:string)=>{try{await api.assignCfgProfile(accountId,profileId||undefined);setAssignments(await api.cfgAssignments());notify("success","账号 cfg 已更新")}catch(error){notify("error",errorMessage(error))}};
-  const showPreview=async(file:Cs2RuntimeFile)=>{try{setPreview({path:file.path,content:await api.previewCs2RuntimeFile(file.path)})}catch(error){notify("error",errorMessage(error))}};
-  const restore=async(version:CfgProfileVersion)=>{if(!active||!confirm("恢复该历史内容？当前内容会先自动进入历史。"))return;try{const restored=await api.restoreCfgVersion(active.id,version.id);setContent(restored);setDirty(true);notify("success","历史内容已载入，正在保存")}catch(error){notify("error",errorMessage(error))}};
-  return <section className="cs2-workspace">
-    <header className="page-heading"><div><h1>CS2 配置</h1><p>管理可复用 cfg，切换账号时自动复制并校验启动参数。</p></div><div className="heading-actions"><button className="button secondary" onClick={()=>void importFile()}><FolderOpen/>导入 cfg</button><button className="button primary" onClick={()=>void create()}><Plus/>新建方案</button></div></header>
-    <div className="cfg-layout">
-      <aside className="cfg-sidebar" aria-label="cfg 方案"><strong>配置方案</strong>{profiles.map(profile=><button key={profile.id} className={profile.id===activeId?"active":""} onClick={()=>setActiveId(profile.id)}><FileCode2/><span>{profile.name}<small>{profile.fileName}</small></span></button>)}{!profiles.length&&<p>还没有 cfg。新建或导入一个方案开始编辑。</p>}</aside>
-      <main className="cfg-editor-panel">{active?<><div className="cfg-editor-toolbar"><input aria-label="方案名称" value={name} onChange={event=>{setName(event.target.value);setDirty(true)}}/><code>{active.fileName}</code><span className={saving||dirty?"saving":"saved"}>{saving||dirty?"正在保存":"已保存"}</span><button className="icon-button danger" aria-label="删除 cfg" onClick={()=>void remove()}><Trash2/></button></div><textarea className="cfg-editor" spellCheck={false} value={content} onChange={event=>{setContent(event.target.value);setDirty(true)}} aria-label="cfg 编辑器"/></>:<div className="empty compact"><FileCode2/><h2>选择一个 cfg 方案</h2><p>命令说明只在编辑器中展示，不会写入文件。</p></div>}</main>
-      <aside className="cfg-inspector"><section><h2>命令备注</h2>{notes.length?notes.map(({command,note})=><div className="command-note" key={command}><code>{command}</code><p>{note?.description||"暂无可核验的官方说明，仍允许保存。"}</p>{note&&<button onClick={()=>void openUrl(note.source)}>查看来源</button>}</div>):<p className="muted-copy">输入命令后，这里会显示匹配的官方说明。</p>}</section><section><h2><History/>历史版本</h2>{versions.slice(0,5).map(version=><button className="history-row" key={version.id} onClick={()=>void restore(version)}><Clock3/>{new Date(version.createdAt).toLocaleString("zh-CN")}<RotateCcw/></button>)}{!versions.length&&<p className="muted-copy">修改后自动保留最近 10 个版本。</p>}</section></aside>
-    </div>
-    <section className="page-panel assignment-panel"><div className="panel-heading"><div><h2>账号启动配置</h2><p>每个 Steam 账号选择一个 cfg；不选择则切换时不处理 CS2 配置。</p></div></div><div className="assignment-list">{accounts.map(account=><label key={account.id}><span>{account.personaName||account.alias||account.accountName||"未命名账号"}<small>…{account.steamId64.slice(-6)}</small></span><select value={assignmentFor(account.id)} onChange={event=>void assign(account.id,event.target.value)}><option value="">不应用 cfg</option>{profiles.map(profile=><option value={profile.id} key={profile.id}>{profile.name} · {profile.fileName}</option>)}</select></label>)}</div></section>
-    <section className="page-panel runtime-panel"><div className="panel-heading"><div><h2>CS2 运行时配置预览</h2><p>只读查看 userdata 中实际存在的文件；Valve 未保证这些文件名长期不变。</p></div></div><div className="runtime-browser"><div>{runtimeFiles.map(file=><button key={file.path} className={preview?.path===file.path?"active":""} onClick={()=>void showPreview(file)}><span>账号 …{file.steamId64.slice(-6)}</span><strong>{file.name}</strong><small>{Math.ceil(file.size/1024)} KB</small></button>)}{!runtimeFiles.length&&<p className="muted-copy">未检测到 CS2 运行时配置。</p>}</div><pre>{preview?.content||"选择文件后在这里预览内容"}</pre></div></section>
-  </section>
+type Preview = { path: string; name: string; content: string };
+type ToolTab = "notes" | "history" | "runtime";
+
+export function Cs2Page({
+  notify,
+}: {
+  notify: (kind: "success" | "error", text: string) => void;
+}) {
+  const workspace = useCfgWorkspace();
+  const [profiles, setProfiles] = useState<CfgProfile[]>([]);
+  const [versions, setVersions] = useState<CfgProfileVersion[]>([]);
+  const [runtimeFiles, setRuntimeFiles] = useState<Cs2RuntimeFile[]>([]);
+  const [preview, setPreview] = useState<Preview>();
+  const [toolTab, setToolTab] = useState<ToolTab>("notes");
+  const [cursor, setCursor] = useState({ line: 1, column: 1 });
+  const gutterRef = useRef<HTMLPreElement>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const draft = workspace.draft;
+  const dirty = workspace.isDirty();
+
+  const refreshProfiles = async () => {
+    await flushCfgDraft();
+    const active = await api.activeCfgProfile();
+    const items = await api.cfgProfiles();
+    setProfiles(items);
+    workspace.load(active);
+    setPreview(undefined);
+    setVersions(await api.cfgVersions(active.id).catch(() => []));
+  };
+
+  useEffect(() => {
+    void Promise.all([
+      refreshProfiles(),
+      api.cs2RuntimeFiles().then(setRuntimeFiles).catch(() => setRuntimeFiles([])),
+    ]).catch((error) => notify("error", errorMessage(error)));
+  }, []);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const timer = window.setTimeout(() => {
+      void flushCfgDraft()
+        .then(() => {
+          const saved = useCfgWorkspace.getState().draft;
+          if (saved) {
+            setProfiles((items) =>
+              items.map((item) =>
+                item.id === saved.id
+                  ? {
+                      ...item,
+                      name: saved.name,
+                      content: saved.content,
+                      updatedAt: new Date().toISOString(),
+                    }
+                  : item,
+              ),
+            );
+          }
+        })
+        .catch((error) => notify("error", errorMessage(error)));
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [workspace.revision]);
+
+  const notes = useMemo(() => {
+    const seen = new Set<string>();
+    return (draft?.content ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("//"))
+      .map((line) => line.split(/\s+/)[0].toLowerCase())
+      .filter((command) => !seen.has(command) && Boolean(seen.add(command)))
+      .map((command) => ({ command, note: commandNotes[command] }));
+  }, [draft?.content]);
+
+  const lineNumbers = useMemo(
+    () =>
+      Array.from(
+        { length: (preview?.content ?? draft?.content ?? "").split("\n").length },
+        (_, index) => index + 1,
+      ).join("\n"),
+    [draft?.content, preview?.content],
+  );
+
+  const selectProfile = async (id: string) => {
+    if (id === draft?.id) return;
+    try {
+      await flushCfgDraft();
+      const selected = await api.setActiveCfgProfile(id);
+      workspace.load(selected);
+      setPreview(undefined);
+      setVersions(await api.cfgVersions(id).catch(() => []));
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
+  const createProfile = async () => {
+    try {
+      await flushCfgDraft();
+      const suffix = Date.now().toString().slice(-6);
+      const profile = await api.createCfgProfile(
+        `新配置 ${profiles.length + 1}`,
+        `profile-${suffix}.cfg`,
+      );
+      setProfiles((items) => [...items, profile]);
+      workspace.load(profile);
+      setPreview(undefined);
+      setVersions([]);
+      notify("success", "已创建并启用 CFG");
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
+  const importFile = async () => {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "CS2 CFG", extensions: ["cfg"] }],
+      title: "导入 CS2 CFG",
+    });
+    if (typeof path !== "string") return;
+    try {
+      await flushCfgDraft();
+      const profile = await api.importCfgProfile(path);
+      setProfiles((items) => [...items, profile]);
+      workspace.load(profile);
+      setPreview(undefined);
+      setVersions([]);
+      notify("success", `已导入并启用 ${profile.fileName}`);
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
+  const removeProfile = async () => {
+    if (
+      !draft ||
+      !confirm(`删除“${draft.name}”？至少会保留一个可用方案。`)
+    )
+      return;
+    try {
+      await flushCfgDraft();
+      await api.deleteCfgProfile(draft.id);
+      await refreshProfiles();
+      notify("success", "CFG 已删除，当前方案已自动修复");
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
+  const restore = async (version: CfgProfileVersion) => {
+    if (!draft || !confirm("恢复该历史内容？当前内容会先进入历史。")) return;
+    try {
+      workspace.edit({
+        content: await api.restoreCfgVersion(draft.id, version.id),
+      });
+      notify("success", "历史内容已载入，正在保存");
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
+  const showPreview = async (file: Cs2RuntimeFile) => {
+    try {
+      setPreview({
+        path: file.path,
+        name: file.name,
+        content: await api.previewCs2RuntimeFile(file.path),
+      });
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
+  const updateCursor = (target: HTMLTextAreaElement) => {
+    const before = target.value.slice(0, target.selectionStart);
+    const lines = before.split("\n");
+    setCursor({ line: lines.length, column: lines.at(-1)!.length + 1 });
+  };
+
+  const onEditorKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void flushCfgDraft().catch((error) => notify("error", errorMessage(error)));
+      return;
+    }
+    if (event.key === "Tab" && !preview) {
+      event.preventDefault();
+      const target = event.currentTarget;
+      const start = target.selectionStart;
+      const end = target.selectionEnd;
+      const next = `${target.value.slice(0, start)}  ${target.value.slice(end)}`;
+      workspace.edit({ content: next });
+      window.requestAnimationFrame(() => {
+        target.selectionStart = target.selectionEnd = start + 2;
+        updateCursor(target);
+      });
+    }
+  };
+
+  const editorValue = preview?.content ?? draft?.content ?? "";
+  const saveLabel = workspace.saving
+    ? "正在保存"
+    : dirty
+      ? "等待保存"
+      : "已保存";
+
+  return (
+    <section className="cs2-workspace">
+      <header className="page-heading cfg-heading">
+        <div>
+          <h1>CS2 CFG 工作台</h1>
+          <p>当前方案会在切换任何 Steam 账号前复制、校验并更新启动项。</p>
+        </div>
+      </header>
+
+      <div className="cfg-commandbar">
+        <select
+          aria-label="当前 CFG"
+          value={draft?.id ?? ""}
+          onChange={(event) => void selectProfile(event.target.value)}
+        >
+          {profiles.map((profile) => (
+            <option value={profile.id} key={profile.id}>
+              {profile.name} · {profile.fileName}
+            </option>
+          ))}
+        </select>
+        <button className="button secondary" onClick={() => void importFile()}>
+          <FolderOpen />
+          导入 CFG
+        </button>
+        <button className="button secondary" onClick={() => void createProfile()}>
+          <Plus />
+          新建 CFG
+        </button>
+        <code className="exec-preview">+exec {draft?.fileName ?? "autoexec.cfg"}</code>
+        <span className={`cfg-save-state ${dirty ? "saving" : "saved"}`}>
+          {saveLabel}
+        </span>
+      </div>
+
+      <section className="code-workbench">
+        <div className="editor-tabbar">
+          <div className="editor-tab active">
+            <FileCode2 />
+            {preview ? preview.name : draft?.fileName}
+            {preview && <span>只读</span>}
+          </div>
+          {preview && (
+            <button onClick={() => setPreview(undefined)}>返回当前 CFG</button>
+          )}
+          {!preview && draft && (
+            <>
+              <input
+                aria-label="方案名称"
+                value={draft.name}
+                onChange={(event) => workspace.edit({ name: event.target.value })}
+              />
+              <button
+                className="icon-button danger"
+                aria-label="删除 CFG"
+                disabled={profiles.length <= 1}
+                onClick={() => void removeProfile()}
+              >
+                <Trash2 />
+              </button>
+            </>
+          )}
+        </div>
+        <div className="editor-surface">
+          <pre ref={gutterRef} aria-hidden="true">
+            {lineNumbers}
+          </pre>
+          <textarea
+            ref={editorRef}
+            aria-label={preview ? "运行文件只读预览" : "CFG 编辑器"}
+            value={editorValue}
+            readOnly={Boolean(preview)}
+            spellCheck={false}
+            onChange={(event) => workspace.edit({ content: event.target.value })}
+            onKeyDown={onEditorKeyDown}
+            onClick={(event) => updateCursor(event.currentTarget)}
+            onKeyUp={(event) => updateCursor(event.currentTarget)}
+            onScroll={(event) => {
+              if (gutterRef.current) {
+                gutterRef.current.scrollTop = event.currentTarget.scrollTop;
+              }
+            }}
+          />
+        </div>
+        <footer className="editor-statusbar">
+          <span>{preview ? "只读预览" : saveLabel}</span>
+          <span className="spacer" />
+          <span>
+            Ln {cursor.line}, Col {cursor.column}
+          </span>
+          <span>UTF-8</span>
+          <span>CFG</span>
+        </footer>
+      </section>
+
+      <details className="cfg-tools">
+        <summary>备注、历史与运行文件</summary>
+        <div className="cfg-tool-tabs">
+          <button
+            className={toolTab === "notes" ? "active" : ""}
+            onClick={() => setToolTab("notes")}
+          >
+            <FileCode2 />
+            命令备注
+          </button>
+          <button
+            className={toolTab === "history" ? "active" : ""}
+            onClick={() => setToolTab("history")}
+          >
+            <History />
+            历史版本
+          </button>
+          <button
+            className={toolTab === "runtime" ? "active" : ""}
+            onClick={() => setToolTab("runtime")}
+          >
+            <FolderOpen />
+            运行文件
+          </button>
+        </div>
+        <div className="cfg-tool-content">
+          {toolTab === "notes" &&
+            (notes.length ? (
+              notes.map(({ command, note }) => (
+                <article className="command-note" key={command}>
+                  <code>{command}</code>
+                  <p>{note?.description || "暂无匹配的官方说明。"}</p>
+                  {note && (
+                    <button onClick={() => void openUrl(note.source)}>
+                      查看官方说明
+                    </button>
+                  )}
+                </article>
+              ))
+            ) : (
+              <p className="muted-copy">输入命令后显示匹配备注，备注不会写入 CFG。</p>
+            ))}
+          {toolTab === "history" &&
+            (versions.length ? (
+              versions.map((version) => (
+                <button
+                  className="history-row"
+                  key={version.id}
+                  onClick={() => void restore(version)}
+                >
+                  <Clock3 />
+                  {new Date(version.createdAt).toLocaleString("zh-CN")}
+                  <RotateCcw />
+                </button>
+              ))
+            ) : (
+              <p className="muted-copy">修改后自动保留最近 10 个版本。</p>
+            ))}
+          {toolTab === "runtime" &&
+            (runtimeFiles.length ? (
+              <div className="runtime-file-list">
+                {runtimeFiles.map((file) => (
+                  <button key={file.path} onClick={() => void showPreview(file)}>
+                    <span>账号 …{file.steamId64.slice(-6)}</span>
+                    <strong>{file.name}</strong>
+                    <small>{Math.max(1, Math.ceil(file.size / 1024))} KB</small>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="muted-copy">未检测到 CS2 运行配置文件。</p>
+            ))}
+        </div>
+      </details>
+    </section>
+  );
 }

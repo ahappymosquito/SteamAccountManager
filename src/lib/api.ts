@@ -26,6 +26,8 @@ export const api = {
   discoverPlatformApps: () => invoke<PlatformApp[]>("discover_platform_apps"),
   discoverCs2Configs: () => invoke<Cs2Config[]>("discover_cs2_configs"),
   cfgProfiles: () => invoke<CfgProfile[]>("list_cfg_profiles"),
+  activeCfgProfile: () => invoke<CfgProfile>("get_active_cfg_profile"),
+  setActiveCfgProfile: (id:string) => invoke<CfgProfile>("set_active_cfg_profile",{id}),
   createCfgProfile: (name:string,fileName:string,content="") => invoke<CfgProfile>("create_cfg_profile",{name,fileName,content}),
   importCfgProfile: (path:string) => invoke<CfgProfile>("import_cfg_profile",{path}),
   saveCfgProfile: (id:string,name:string,content:string) => invoke<void>("save_cfg_profile",{id,name,content}),

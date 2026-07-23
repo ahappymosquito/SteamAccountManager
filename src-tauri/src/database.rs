@@ -11,7 +11,17 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub struct Database(pub Mutex<Connection>);
-pub type AssignedCfg = (String, String, String, Option<String>);
+
+fn cfg_profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CfgProfile> {
+    Ok(CfgProfile {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        file_name: row.get(2)?,
+        content: row.get(3)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
+}
 
 impl Database {
     pub fn open(path: &Path) -> AppResult<Self> {
@@ -21,7 +31,9 @@ impl Database {
         let tx = conn.transaction()?;
         tx.execute_batch(include_str!("../migrations/001_init.sql"))?;
         tx.commit()?;
-        Ok(Self(Mutex::new(conn)))
+        let database = Self(Mutex::new(conn));
+        database.ensure_active_cfg_profile()?;
+        Ok(database)
     }
 
     pub fn sync_accounts(&self, incoming: &[LocalSteamAccount]) -> AppResult<usize> {
@@ -338,6 +350,101 @@ impl Database {
         Ok(profiles)
     }
 
+    pub fn ensure_active_cfg_profile(&self) -> AppResult<CfgProfile> {
+        let mut conn = self.0.lock();
+        let tx = conn.transaction()?;
+        let configured = tx
+            .query_row(
+                "SELECT value_json FROM app_settings WHERE key='active_cfg_profile_id'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|value| serde_json::from_str::<String>(&value).ok());
+        let selected = configured
+            .and_then(|id| {
+                tx.query_row(
+                    "SELECT id,name,file_name,content,created_at,updated_at FROM cfg_profiles WHERE id=?1",
+                    [id],
+                    cfg_profile_from_row,
+                )
+                .optional()
+                .ok()
+                .flatten()
+            })
+            .or_else(|| {
+                tx.query_row(
+                    "SELECT p.id,p.name,p.file_name,p.content,p.created_at,p.updated_at FROM account_cfg_profiles x JOIN cfg_profiles p ON p.id=x.profile_id JOIN steam_accounts a ON a.id=x.steam_account_id ORDER BY COALESCE(a.last_switched_at,x.updated_at) DESC LIMIT 1",
+                    [],
+                    cfg_profile_from_row,
+                )
+                .optional()
+                .ok()
+                .flatten()
+            })
+            .or_else(|| {
+                tx.query_row(
+                    "SELECT id,name,file_name,content,created_at,updated_at FROM cfg_profiles ORDER BY updated_at DESC LIMIT 1",
+                    [],
+                    cfg_profile_from_row,
+                )
+                .optional()
+                .ok()
+                .flatten()
+            });
+        let profile = if let Some(profile) = selected {
+            profile
+        } else {
+            let now = Utc::now().to_rfc3339();
+            let profile = CfgProfile {
+                id: Uuid::new_v4().to_string(),
+                name: "默认配置".to_string(),
+                file_name: "autoexec.cfg".to_string(),
+                content: String::new(),
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            tx.execute(
+                "INSERT INTO cfg_profiles(id,name,file_name,content,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![profile.id,profile.name,profile.file_name,profile.content,profile.created_at,profile.updated_at],
+            )?;
+            profile
+        };
+        let value = serde_json::to_string(&profile.id)
+            .map_err(|error| AppError::new("CFG_STATE_INVALID", error.to_string()))?;
+        tx.execute(
+            "INSERT INTO app_settings(key,value_json,updated_at) VALUES('active_cfg_profile_id',?1,?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at",
+            params![value,Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(profile)
+    }
+
+    pub fn active_cfg_profile(&self) -> AppResult<CfgProfile> {
+        self.ensure_active_cfg_profile()
+    }
+
+    pub fn set_active_cfg_profile(&self, id: &str) -> AppResult<CfgProfile> {
+        let conn = self.0.lock();
+        let profile = conn
+            .query_row(
+                "SELECT id,name,file_name,content,created_at,updated_at FROM cfg_profiles WHERE id=?1",
+                [id],
+                cfg_profile_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| {
+                AppError::new("CFG_PROFILE_NOT_FOUND", "找不到该 CS2 cfg 方案")
+            })?;
+        let value = serde_json::to_string(id)
+            .map_err(|error| AppError::new("CFG_STATE_INVALID", error.to_string()))?;
+        conn.execute(
+            "INSERT INTO app_settings(key,value_json,updated_at) VALUES('active_cfg_profile_id',?1,?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at",
+            params![value,Utc::now().to_rfc3339()],
+        )?;
+        Ok(profile)
+    }
+
     pub fn create_cfg_profile(
         &self,
         name: &str,
@@ -398,6 +505,52 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_cfg_profile_and_repair_active(&self, id: &str) -> AppResult<CfgProfile> {
+        let mut conn = self.0.lock();
+        let tx = conn.transaction()?;
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM cfg_profiles", [], |row| row.get(0))?;
+        if count <= 1 {
+            return Err(AppError::new(
+                "CFG_LAST_PROFILE",
+                "至少需要保留一个 CFG 方案",
+            ));
+        }
+        let exists = tx
+            .query_row("SELECT 1 FROM cfg_profiles WHERE id=?1", [id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(AppError::new(
+                "CFG_PROFILE_NOT_FOUND",
+                "找不到该 CS2 cfg 方案",
+            ));
+        }
+        tx.execute("DELETE FROM cfg_profiles WHERE id=?1", [id])?;
+        let next = tx.query_row(
+            "SELECT id,name,file_name,content,created_at,updated_at FROM cfg_profiles ORDER BY updated_at DESC LIMIT 1",
+            [],
+            cfg_profile_from_row,
+        )?;
+        let configured = tx
+            .query_row(
+                "SELECT value_json FROM app_settings WHERE key='active_cfg_profile_id'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|value| serde_json::from_str::<String>(&value).ok());
+        if configured.as_deref() == Some(id) {
+            let value = serde_json::to_string(&next.id)
+                .map_err(|error| AppError::new("CFG_STATE_INVALID", error.to_string()))?;
+            tx.execute(
+                "INSERT INTO app_settings(key,value_json,updated_at) VALUES('active_cfg_profile_id',?1,?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at",
+                params![value,Utc::now().to_rfc3339()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(next)
+    }
+
     pub fn assign_cfg_profile(&self, steam_account_id: &str, profile_id: &str) -> AppResult<()> {
         let conn = self.0.lock();
         let account_exists = conn
@@ -456,24 +609,24 @@ impl Database {
         Ok(assignments)
     }
 
-    pub fn cfg_for_steam_id(&self, steam_id64: &str) -> AppResult<Option<AssignedCfg>> {
+    pub fn mark_cfg_applied(&self, steam_id64: &str, file_name: &str) -> AppResult<()> {
+        self.0.lock().execute(
+            "INSERT INTO account_cfg_deployments(steam_account_id,last_applied_file,updated_at) SELECT id,?1,?2 FROM steam_accounts WHERE steam_id64=?3 ON CONFLICT(steam_account_id) DO UPDATE SET last_applied_file=excluded.last_applied_file,updated_at=excluded.updated_at",
+            params![file_name,Utc::now().to_rfc3339(),steam_id64],
+        )?;
+        Ok(())
+    }
+
+    pub fn last_applied_cfg_file(&self, steam_id64: &str) -> AppResult<Option<String>> {
         Ok(self
             .0
             .lock()
             .query_row(
-                "SELECT p.id,p.file_name,p.content,x.last_applied_file FROM account_cfg_profiles x JOIN steam_accounts a ON a.id=x.steam_account_id JOIN cfg_profiles p ON p.id=x.profile_id WHERE a.steam_id64=?1",
+                "SELECT d.last_applied_file FROM account_cfg_deployments d JOIN steam_accounts a ON a.id=d.steam_account_id WHERE a.steam_id64=?1",
                 [steam_id64],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| row.get(0),
             )
             .optional()?)
-    }
-
-    pub fn mark_cfg_applied(&self, steam_id64: &str, file_name: &str) -> AppResult<()> {
-        self.0.lock().execute(
-            "UPDATE account_cfg_profiles SET last_applied_file=?1,updated_at=?2 WHERE steam_account_id=(SELECT id FROM steam_accounts WHERE steam_id64=?3)",
-            params![file_name, Utc::now().to_rfc3339(), steam_id64],
-        )?;
-        Ok(())
     }
 
     pub fn list_cfg_versions(&self, profile_id: &str) -> AppResult<Vec<CfgProfileVersion>> {
@@ -616,5 +769,32 @@ mod tests {
         let restored = db.list_accounts().expect("restored list").remove(0);
         assert_eq!(restored.alias.as_deref(), Some("主力"));
         assert_eq!(restored.tags.len(), 2);
+    }
+
+    #[test]
+    fn global_active_cfg_is_created_repaired_and_persisted() {
+        let temp = tempfile::tempdir().expect("temp");
+        let db = Database::open(&temp.path().join("cfg.db")).expect("db");
+
+        let initial = db.ensure_active_cfg_profile().expect("default profile");
+        assert_eq!(initial.file_name, "autoexec.cfg");
+        assert_eq!(db.active_cfg_profile().expect("persisted").id, initial.id);
+
+        let second = db
+            .create_cfg_profile("Practice", "practice.cfg", "sv_cheats 1")
+            .expect("second profile");
+        assert_eq!(
+            db.set_active_cfg_profile(&second.id).expect("select").id,
+            second.id
+        );
+        db.delete_cfg_profile_and_repair_active(&second.id)
+            .expect("delete selected");
+        assert_eq!(db.active_cfg_profile().expect("repaired").id, initial.id);
+        assert_eq!(
+            db.delete_cfg_profile_and_repair_active(&initial.id)
+                .expect_err("last profile cannot be deleted")
+                .code,
+            "CFG_LAST_PROFILE"
+        );
     }
 }

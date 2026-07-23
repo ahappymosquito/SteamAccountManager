@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS platform_apps (platform_code TEXT PRIMARY KEY, name T
 CREATE TABLE IF NOT EXISTS cfg_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, file_name TEXT NOT NULL UNIQUE, content TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cfg_profile_versions (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY (profile_id) REFERENCES cfg_profiles(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS account_cfg_profiles (steam_account_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, last_applied_file TEXT, updated_at TEXT NOT NULL, FOREIGN KEY (steam_account_id) REFERENCES steam_accounts(id) ON DELETE CASCADE, FOREIGN KEY (profile_id) REFERENCES cfg_profiles(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS account_cfg_deployments (steam_account_id TEXT PRIMARY KEY, last_applied_file TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY (steam_account_id) REFERENCES steam_accounts(id) ON DELETE CASCADE);
+INSERT OR IGNORE INTO account_cfg_deployments(steam_account_id,last_applied_file,updated_at) SELECT steam_account_id,last_applied_file,updated_at FROM account_cfg_profiles WHERE last_applied_file IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_steam_accounts_name ON steam_accounts(account_name);
 CREATE INDEX IF NOT EXISTS idx_steam_accounts_switched ON steam_accounts(last_switched_at);
 CREATE INDEX IF NOT EXISTS idx_profiles_group ON account_profiles(group_name);

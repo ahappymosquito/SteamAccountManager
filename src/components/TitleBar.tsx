@@ -4,20 +4,20 @@ import { Minus, Palette, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { MouseEvent } from "react";
 import type { Theme } from "../lib/types";
-import { applyTheme, themes } from "../lib/themes";
+import { themes } from "../lib/themes";
 
 export function TitleBar({theme,onThemeChange}:{theme:Theme;onThemeChange:(theme:Theme)=>void}){
   const appWindow=getCurrentWindow();
-  const select=(value:Theme)=>{applyTheme(value);onThemeChange(value)};
+  const select=(value:Theme)=>onThemeChange(value);
   const startDrag=(event:MouseEvent<HTMLElement>)=>{
     if(event.button===0&&!(event.target as HTMLElement).closest("button"))void appWindow.startDragging();
   };
   const toggleMaximize=(event:MouseEvent<HTMLElement>)=>{
     if(!(event.target as HTMLElement).closest("button"))void appWindow.toggleMaximize();
   };
-  return <header className="window-titlebar" data-tauri-drag-region onMouseDown={startDrag} onDoubleClick={toggleMaximize}>
-    <div className="window-title" data-tauri-drag-region><img src="/favicon.svg" alt=""/><span>Steam Account Manager</span></div>
-    <div className="window-drag-space" data-tauri-drag-region/>
+  return <header className="window-titlebar" onMouseDown={startDrag} onDoubleClick={toggleMaximize}>
+    <div className="window-title"><img src="/favicon.svg" alt=""/><span>Steam Account Manager</span></div>
+    <div className="window-drag-space"/>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild><button className="titlebar-button theme-trigger" aria-label="切换主题"><Palette/></button></DropdownMenu.Trigger>
       <DropdownMenu.Portal><DropdownMenu.Content className="theme-menu" sideOffset={6} align="end">

@@ -440,7 +440,18 @@ fn discover_cs2_configs(state: State<AppState>) -> AppResult<Vec<Cs2Config>> {
 
 #[tauri::command]
 fn list_cfg_profiles(state: State<AppState>) -> AppResult<Vec<CfgProfile>> {
+    state.db.ensure_active_cfg_profile()?;
     state.db.list_cfg_profiles()
+}
+
+#[tauri::command]
+fn get_active_cfg_profile(state: State<AppState>) -> AppResult<CfgProfile> {
+    state.db.active_cfg_profile()
+}
+
+#[tauri::command]
+fn set_active_cfg_profile(state: State<AppState>, id: String) -> AppResult<CfgProfile> {
+    state.db.set_active_cfg_profile(&id)
 }
 
 #[tauri::command]
@@ -463,6 +474,7 @@ fn create_cfg_profile(
         let _ = state.db.delete_cfg_profile(&profile.id);
         return Err(error);
     }
+    state.db.set_active_cfg_profile(&profile.id)?;
     Ok(profile)
 }
 
@@ -479,7 +491,14 @@ fn import_cfg_profile(state: State<AppState>, path: String) -> AppResult<CfgProf
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| AppError::new("CFG_IMPORT_INVALID", "cfg 文件名无效"))?;
-    let file_name = cs2::validate_cfg_file_name(file_name)?;
+    let requested = cs2::validate_cfg_file_name(file_name)?;
+    let existing = state
+        .db
+        .list_cfg_profiles()?
+        .into_iter()
+        .map(|profile| profile.file_name)
+        .collect::<Vec<_>>();
+    let file_name = cs2::unique_cfg_file_name(&requested, &existing);
     let name = path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -511,15 +530,16 @@ fn save_cfg_profile(
 
 #[tauri::command]
 fn delete_cfg_profile(state: State<AppState>, id: String) -> AppResult<()> {
-    if let Some(profile) = state
+    let profile = state
         .db
         .list_cfg_profiles()?
         .into_iter()
-        .find(|profile| profile.id == id)
-    {
+        .find(|profile| profile.id == id);
+    state.db.delete_cfg_profile_and_repair_active(&id)?;
+    if let Some(profile) = profile {
         let _ = fs::remove_file(cs2::managed_file(&state.data_dir, &profile.file_name));
     }
-    state.db.delete_cfg_profile(&id)
+    Ok(())
 }
 
 #[tauri::command]
@@ -936,6 +956,8 @@ pub fn run() {
             discover_platform_apps,
             discover_cs2_configs,
             list_cfg_profiles,
+            get_active_cfg_profile,
+            set_active_cfg_profile,
             create_cfg_profile,
             import_cfg_profile,
             save_cfg_profile,

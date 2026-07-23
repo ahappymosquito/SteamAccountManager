@@ -30,6 +30,23 @@ pub fn validate_cfg_file_name(file_name: &str) -> AppResult<String> {
     Ok(trimmed.to_string())
 }
 
+pub fn unique_cfg_file_name(requested: &str, existing: &[String]) -> String {
+    let known = existing
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let stem = requested
+        .rsplit_once('.')
+        .map_or(requested, |(stem, _)| stem);
+    let mut candidate = requested.to_string();
+    let mut suffix = 2;
+    while known.contains(&candidate.to_ascii_lowercase()) {
+        candidate = format!("{stem}-{suffix}.cfg");
+        suffix += 1;
+    }
+    candidate
+}
+
 pub fn managed_file(data_dir: &Path, file_name: &str) -> PathBuf {
     data_dir.join("cfg-library").join(file_name)
 }
@@ -117,21 +134,11 @@ pub fn prepare_for_switch(
     steam_dir: &Path,
     steam_id64: &str,
 ) -> AppResult<Option<String>> {
-    let Some((_profile_id, file_name, content, previous_file)) = db.cfg_for_steam_id(steam_id64)?
-    else {
-        return Ok(None);
-    };
-    let file_name = validate_cfg_file_name(&file_name)?;
+    let profile = db.ensure_active_cfg_profile()?;
+    let previous_file = db.last_applied_cfg_file(steam_id64)?;
+    let file_name = validate_cfg_file_name(&profile.file_name)?;
     let managed = managed_file(data_dir, &file_name);
-    if !managed.is_file() || fs::read_to_string(&managed)? != content {
-        let profile = CfgProfile {
-            id: String::new(),
-            name: String::new(),
-            file_name: file_name.clone(),
-            content,
-            created_at: String::new(),
-            updated_at: String::new(),
-        };
+    if !managed.is_file() || fs::read_to_string(&managed)? != profile.content {
         write_managed_profile(data_dir, &profile)?;
     }
     let target = cs2_cfg_directory(steam_dir)?.join(&file_name);
@@ -256,6 +263,17 @@ mod tests {
         );
         assert!(validate_cfg_file_name("../autoexec.cfg").is_err());
         assert!(validate_cfg_file_name("config.txt").is_err());
+    }
+
+    #[test]
+    fn suffixes_duplicate_import_names() {
+        assert_eq!(
+            unique_cfg_file_name(
+                "autoexec.cfg",
+                &["autoexec.cfg".into(), "autoexec-2.cfg".into()]
+            ),
+            "autoexec-3.cfg"
+        );
     }
 
     #[test]
