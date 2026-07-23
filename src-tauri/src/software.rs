@@ -7,7 +7,7 @@ use sha2::{Digest, Sha512};
 use std::{
     env,
     fs::{self, File},
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -16,6 +16,67 @@ use std::{
 pub const PERFECT_DOWNLOAD_PAGE: &str = "https://pvp.wanmei.com/";
 pub const FIVE_E_DOWNLOAD_PAGE: &str = "https://arena.5eplay.com/download/latest";
 pub const TEAMSPEAK_DOWNLOAD_PAGE: &str = "https://www.teamspeak.com/en/downloads/";
+
+fn launch_official_with(
+    url: &str,
+    candidates: impl IntoIterator<Item = PathBuf>,
+    mut launch: impl FnMut(&Path, &str) -> io::Result<()>,
+    mut fallback: impl FnMut(&str) -> io::Result<()>,
+) -> io::Result<()> {
+    for candidate in candidates {
+        if launch(&candidate, url).is_ok() {
+            return Ok(());
+        }
+    }
+    fallback(url)
+}
+
+fn edge_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for variable in ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"] {
+        if let Some(root) = env::var_os(variable) {
+            candidates.push(
+                PathBuf::from(root)
+                    .join("Microsoft")
+                    .join("Edge")
+                    .join("Application")
+                    .join("msedge.exe"),
+            );
+        }
+    }
+    candidates.push(PathBuf::from("msedge.exe"));
+    candidates
+}
+
+pub fn open_official(code: &str) -> AppResult<()> {
+    let url = match code {
+        "5e" => FIVE_E_DOWNLOAD_PAGE,
+        "perfectworld" => PERFECT_DOWNLOAD_PAGE,
+        "teamspeak3" => TEAMSPEAK_DOWNLOAD_PAGE,
+        _ => return Err(AppError::new("SOFTWARE_NOT_SUPPORTED", "不支持该软件官网")),
+    };
+    launch_official_with(
+        url,
+        edge_candidates(),
+        |program, address| {
+            Command::new(program)
+                .arg("--new-window")
+                .arg(address)
+                .spawn()
+                .map(|_| ())
+        },
+        |address| {
+            Command::new("explorer.exe")
+                .arg(address)
+                .spawn()
+                .map(|_| ())
+        },
+    )
+    .map_err(|error| {
+        AppError::new("BROWSER_OPEN_FAILED", "无法打开浏览器")
+            .detail(format!("Edge 与系统默认浏览器均启动失败: {error}"))
+    })
+}
 
 struct DownloadSpec {
     url: String,
@@ -28,7 +89,7 @@ fn client() -> AppResult<Client> {
     Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(60 * 60))
-        .user_agent("SteamAccountManager/0.3.3")
+        .user_agent("SteamAccountManager/0.3.4")
         .build()
         .map_err(|error| {
             AppError::new("DOWNLOAD_CLIENT_FAILED", "无法初始化下载器").detail(error.to_string())
@@ -247,6 +308,7 @@ pub fn discover_teamspeak() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
 
     #[test]
     fn parses_perfect_metadata_fields() {
@@ -256,5 +318,26 @@ mod tests {
             Some("perfectworldarena_win32_v1.2.3.exe")
         );
         assert_eq!(metadata_value(metadata, "size").as_deref(), Some("123"));
+    }
+
+    #[test]
+    fn falls_back_when_edge_cannot_be_started() {
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let result = launch_official_with(
+            "https://arena.5eplay.com/download/latest",
+            [PathBuf::from("missing-edge.exe")],
+            |program: &Path, _url| {
+                attempts
+                    .borrow_mut()
+                    .push(program.to_string_lossy().into_owned());
+                Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
+            },
+            |url| {
+                attempts.borrow_mut().push(format!("system:{url}"));
+                Ok(())
+            },
+        );
+        assert!(result.is_ok());
+        assert!(attempts.borrow().last().unwrap().starts_with("system:"));
     }
 }

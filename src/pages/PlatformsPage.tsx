@@ -1,16 +1,12 @@
 /** Dense platform installation controls and synchronized Steam account associations. */
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   CheckCircle2,
-  Crosshair,
   Download,
   ExternalLink,
   FolderSearch,
-  Headphones,
   RefreshCw,
-  Swords,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -31,11 +27,11 @@ const labels: Record<string, string> = {
   "5e": "5E",
 };
 
-function PlatformGlyph({ code }: { code: SoftwareStatus["code"] }) {
-  if (code === "perfectworld") return <Swords />;
-  if (code === "5e") return <Crosshair />;
-  return <Headphones />;
-}
+const officialIcons: Record<SoftwareStatus["code"], string> = {
+  perfectworld: "/platforms/perfectworld.ico",
+  "5e": "/platforms/5e.png",
+  teamspeak3: "/platforms/teamspeak.png",
+};
 
 export function PlatformsPage({
   accounts,
@@ -132,7 +128,11 @@ export function PlatformsPage({
 
   const download = async (item: SoftwareStatus) => {
     if (item.code === "5e") {
-      await openUrl(item.officialUrl);
+      try {
+        await api.openOfficialUrl("5e");
+      } catch (error) {
+        notify("error", errorMessage(error));
+      }
       return;
     }
     try {
@@ -140,7 +140,7 @@ export function PlatformsPage({
     } catch (error) {
       const appError = error as AppError;
       if (appError.code === "DOWNLOAD_BROWSER_REQUIRED") {
-        await openUrl(item.officialUrl);
+        await api.openOfficialUrl(item.code);
       } else {
         notify("error", errorMessage(error));
       }
@@ -208,7 +208,7 @@ export function PlatformsPage({
                 className={`software-icon ${item.code}`}
                 aria-hidden="true"
               >
-                <PlatformGlyph code={item.code} />
+                <img src={officialIcons[item.code]} alt="" />
               </div>
               <div className="software-info">
                 <h3>{item.name}</h3>

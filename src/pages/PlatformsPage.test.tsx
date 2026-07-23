@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   softwareStatuses: vi.fn(),
   downloadProgress: vi.fn(),
   links: vi.fn(),
+  openOfficialUrl: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
@@ -45,6 +46,7 @@ describe("PlatformsPage", () => {
         message: "安装程序已结束，安装包已删除",
       },
     ]);
+    mocks.openOfficialUrl.mockResolvedValue(undefined);
   });
 
   it("shows 5E as an official-site action and hides completed task chatter", async () => {
@@ -52,6 +54,8 @@ describe("PlatformsPage", () => {
     expect(
       await screen.findByRole("button", { name: "打开 5E 官网" }),
     ).toBeInTheDocument();
+    screen.getByRole("button", { name: "打开 5E 官网" }).click();
+    expect(mocks.openOfficialUrl).toHaveBeenCalledWith("5e");
     expect(
       screen.queryByText("安装程序已结束，安装包已删除"),
     ).not.toBeInTheDocument();

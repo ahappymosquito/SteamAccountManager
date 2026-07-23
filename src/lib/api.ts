@@ -38,6 +38,7 @@ export const api = {
   previewCs2RuntimeFile: (path:string) => invoke<string>("preview_cs2_runtime_file",{path}),
   softwareStatuses: () => invoke<SoftwareStatus[]>("list_software_statuses"),
   downloadProgress: () => invoke<DownloadProgress[]>("list_download_progress"),
+  openOfficialUrl: (code:string) => invoke<void>("open_official_url",{code}),
   startSoftwareDownload: (code:string) => invoke<void>("start_software_download",{code}),
   savePlatformApp: (app:PlatformApp) => invoke<void>("save_platform_app", { app }),
   exportData: (includeSettings:boolean) => invoke<Record<string,unknown>>("export_data", { includeSettings }),

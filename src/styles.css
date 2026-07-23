@@ -85,10 +85,10 @@ html,body,#root{height:100%;overflow:hidden}
 .software-manager>.section-heading,.platform-associations>.section-heading{padding-bottom:10px}
 .software-row{grid-template-columns:48px minmax(220px,1fr) auto auto;padding:12px 0}
 .software-icon{width:42px;height:42px;border-radius:11px;background:transparent;border:1px solid var(--line)}
-.software-icon svg{width:21px;height:21px;stroke-width:1.9}
-.software-icon.perfectworld{color:oklch(.68 .17 28);background:color-mix(in oklch,var(--surface),oklch(.68 .17 28) 10%)}
-.software-icon.\35 e{color:oklch(.67 .18 250);background:color-mix(in oklch,var(--surface),oklch(.67 .18 250) 10%)}
-.software-icon.teamspeak3{color:oklch(.68 .15 290);background:color-mix(in oklch,var(--surface),oklch(.68 .15 290) 10%)}
+.software-icon img{display:block;width:28px;height:28px;object-fit:contain}
+.software-icon.perfectworld{background:oklch(.18 .03 28)}
+.software-icon.\35 e{background:oklch(.97 .01 300)}
+.software-icon.teamspeak3{background:oklch(.97 .01 240)}
 .software-info h3{font-size:13px}.software-info p{max-width:62ch;margin:3px 0 0}
 .download-state{margin-top:6px}.download-state.failed span{color:var(--danger)}.download-state>div{width:120px}
 .software-actions .button svg{width:15px;height:15px}.empty-line{margin:6px 0 0;color:var(--muted);font-size:11px}

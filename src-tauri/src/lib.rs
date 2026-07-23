@@ -617,6 +617,11 @@ fn list_download_progress(state: State<AppState>) -> Vec<DownloadProgress> {
 }
 
 #[tauri::command]
+fn open_official_url(code: String) -> AppResult<()> {
+    software::open_official(&code)
+}
+
+#[tauri::command]
 fn start_software_download(
     app: tauri::AppHandle,
     state: State<AppState>,
@@ -943,6 +948,7 @@ pub fn run() {
             preview_cs2_runtime_file,
             list_software_statuses,
             list_download_progress,
+            open_official_url,
             start_software_download,
             launch_platform,
             export_data,
