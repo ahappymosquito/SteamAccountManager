@@ -674,10 +674,12 @@ fn start_software_download(
                 message: Some(error.message),
             },
         };
-        downloads
-            .lock()
-            .insert(code.clone(), final_progress.clone());
         let _ = app.emit("software-download-progress", &final_progress);
+        if final_progress.state == "completed" {
+            downloads.lock().remove(&code);
+        } else {
+            downloads.lock().insert(code.clone(), final_progress);
+        }
     });
     Ok(())
 }
