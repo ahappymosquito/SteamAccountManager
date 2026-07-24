@@ -10,14 +10,12 @@ export function TitleBar({theme,onThemeChange}:{theme:Theme;onThemeChange:(theme
   const appWindow=getCurrentWindow();
   const select=(value:Theme)=>onThemeChange(value);
   const startDrag=(event:MouseEvent<HTMLElement>)=>{
-    if(event.button===0&&!(event.target as HTMLElement).closest("button"))void appWindow.startDragging();
+    if(event.button===0)void appWindow.startDragging();
   };
-  const toggleMaximize=(event:MouseEvent<HTMLElement>)=>{
-    if(!(event.target as HTMLElement).closest("button"))void appWindow.toggleMaximize();
-  };
-  return <header className="window-titlebar" onMouseDown={startDrag} onDoubleClick={toggleMaximize}>
-    <div className="window-title"><img src="/favicon.svg" alt=""/><span>Steam Account Manager</span></div>
-    <div className="window-drag-space"/>
+  const toggleMaximize=()=>void appWindow.toggleMaximize();
+  return <header className="window-titlebar">
+    <div className="window-title" onMouseDown={startDrag} onDoubleClick={toggleMaximize}><img src="/favicon.svg" alt=""/><span>Steam Account Manager</span></div>
+    <div className="window-drag-space" onMouseDown={startDrag} onDoubleClick={toggleMaximize}/>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild><button className="titlebar-button theme-trigger" aria-label="切换主题"><Palette/></button></DropdownMenu.Trigger>
       <DropdownMenu.Portal><DropdownMenu.Content className="theme-menu" sideOffset={6} align="end">

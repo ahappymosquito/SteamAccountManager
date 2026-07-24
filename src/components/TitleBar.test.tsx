@@ -38,10 +38,13 @@ describe("TitleBar", () => {
     expect(windowApi.startDragging).toHaveBeenCalledTimes(3);
   });
 
-  it("does not drag when a title-bar control is pressed", () => {
+  it("scopes native dragging to explicit drag surfaces", () => {
     const { container } = render(
       <TitleBar theme="glacier" onThemeChange={vi.fn()} />,
     );
+    fireEvent.mouseDown(container.querySelector(".window-titlebar")!, {
+      button: 0,
+    });
     for (const button of container.querySelectorAll("button")) {
       fireEvent.mouseDown(button, { button: 0 });
     }
