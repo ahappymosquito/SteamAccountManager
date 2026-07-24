@@ -6,6 +6,8 @@ src-tauri/target-fixed/
 vite.config.js
 vite.config.d.ts
 .playwright-cli/
+release/*.exe
+release/*.zip
 *.db
 *.db-shm
 *.db-wal

@@ -124,13 +124,13 @@ cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 cmd /c npm run tauri build
 ```
 
-也可以用一条命令完成测试、静态检查和本地 NSIS 打包：
+也可以用一条命令完成测试、静态检查、本地 NSIS 打包和便携版压缩：
 
 ```powershell
-cmd /c npm run package:windows
+cmd /c npm run package:release
 ```
 
-NSIS 安装包生成在 `src-tauri/target/release/bundle/nsis/`。
+最终的 NSIS 安装版与 Windows x64 便携版 ZIP 均生成在项目根目录的 `release/`。`package:windows` 仍可用于只验证并生成底层 NSIS 构建结果。
 
 ## GitHub 自动发布
 

@@ -1,7 +1,7 @@
 {
   "name": "steam-account-manager",
   "private": true,
-  "version": "0.3.6",
+  "version": "0.3.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
-    "package:windows": "npm test && npm run build && cargo fmt --check --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --all-targets && tauri build --bundles nsis"
+    "package:windows": "npm test && npm run build && cargo fmt --check --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --all-targets && tauri build --bundles nsis",
+    "package:release": "npm run package:windows && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1"
   },
   "dependencies": {
     "@hookform/resolvers": "latest",
