@@ -94,24 +94,35 @@ export default function App() {
   };
 
   useEffect(() => {
-    const initialize = async () => {
-      applyTheme(theme);
+    let active = true;
+    const restoreTheme = async () => {
+      try {
+        const settings = await api.settings();
+        if (!active) return;
+        const nextTheme = resolveTheme(storedTheme(), settings.theme);
+        setTheme(nextTheme);
+        applyTheme(nextTheme);
+      } catch (error) {
+        notify("error", errorMessage(error));
+      }
+    };
+    const initializeSteam = async () => {
       try {
         const result = await api.initializeSteam();
         if (!result.steamPath) {
           notify("error", "未自动检测到 Steam，请在设置中选择安装目录");
         }
-        const settings = await api.settings();
-        const nextTheme = resolveTheme(storedTheme(), settings.theme);
-        setTheme(nextTheme);
-        applyTheme(nextTheme);
       } catch (error) {
         notify("error", errorMessage(error));
       } finally {
         await load();
       }
     };
-    void initialize();
+    void restoreTheme();
+    void initializeSteam();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const filtered = useMemo(
