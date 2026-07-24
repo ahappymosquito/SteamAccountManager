@@ -455,6 +455,14 @@ pub fn launch_platform(app: &PlatformApp) -> AppResult<()> {
     Ok(())
 }
 
+pub fn launch_cs2(steam_dir: &Path) -> AppResult<()> {
+    Command::new(steam_dir.join("steam.exe"))
+        .args(["-applaunch", "730"])
+        .spawn()
+        .map_err(|_| AppError::new("CS2_LAUNCH_FAILED", "无法通过 Steam 启动 CS2"))?;
+    Ok(())
+}
+
 fn platform_process_matches(process: &sysinfo::Process, executable: &Path) -> bool {
     let configured_name = executable.file_name().and_then(|value| value.to_str());
     process.exe().is_some_and(|path| {

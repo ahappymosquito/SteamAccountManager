@@ -42,6 +42,7 @@ export const api = {
   downloadProgress: () => invoke<DownloadProgress[]>("list_download_progress"),
   openOfficialUrl: (code:string) => invoke<void>("open_official_url",{code}),
   startSoftwareDownload: (code:string) => invoke<void>("start_software_download",{code}),
+  launchSoftware: (code:string) => invoke<void>("launch_software",{code}),
   savePlatformApp: (app:PlatformApp) => invoke<void>("save_platform_app", { app }),
   exportData: (includeSettings:boolean) => invoke<Record<string,unknown>>("export_data", { includeSettings }),
   previewImport: (data:unknown) => invoke<ImportPreview>("preview_import", { data }),

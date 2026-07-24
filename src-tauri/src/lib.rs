@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -250,6 +250,34 @@ fn current_status(state: State<AppState>) -> CurrentStatus {
     steam::status(path.as_deref())
 }
 
+struct SwitchLaunchPlan {
+    cs2_installed: bool,
+    platform_apps: Vec<PlatformApp>,
+}
+
+fn switch_launch_plan(
+    steam_dir: &Path,
+    links: &[PlatformLink],
+    apps: &[PlatformApp],
+) -> SwitchLaunchPlan {
+    let mut selected = BTreeSet::new();
+    let platform_apps = apps
+        .iter()
+        .filter(|app| {
+            Path::new(&app.executable_path).is_file()
+                && links
+                    .iter()
+                    .any(|link| link.status != "invalid" && link.platform_code == app.platform_code)
+                && selected.insert(app.platform_code.clone())
+        })
+        .cloned()
+        .collect();
+    SwitchLaunchPlan {
+        cs2_installed: cs2::is_installed(steam_dir),
+        platform_apps,
+    }
+}
+
 #[tauri::command]
 fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<SwitchResult> {
     validate_steam_id(&steam_id64)?;
@@ -287,8 +315,14 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
             .and_then(|value| serde_json::from_str::<u64>(&value).ok())
             .unwrap_or(20)
             .clamp(5, 120);
+        let links = state.db.list_links(&account.id)?;
+        let mut platform_apps = state.db.list_platform_apps()?;
+        platform_apps.extend(steam::discover_platform_apps()?);
+        let launch_plan = switch_launch_plan(&dir, &links, &platform_apps);
         steam::shutdown(&dir, shutdown_timeout)?;
-        cs2::prepare_for_switch(&state.db, &state.data_dir, &dir, &steam_id64)?;
+        if launch_plan.cs2_installed {
+            cs2::prepare_for_switch(&state.db, &state.data_dir, &dir, &steam_id64)?;
+        }
         steam::switch(
             &dir,
             &backup,
@@ -297,7 +331,10 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
             startup_timeout,
         )?;
         state.db.mark_switched(&steam_id64)?;
-        for app in state.db.list_platform_apps()?.into_iter() {
+        if launch_plan.cs2_installed {
+            steam::launch_cs2(&dir)?;
+        }
+        for app in launch_plan.platform_apps {
             steam::restart_platform(&app, shutdown_timeout)?;
         }
         Ok(account)
@@ -709,6 +746,43 @@ fn start_software_download(
     Ok(())
 }
 
+fn resolve_software_app(state: &AppState, code: &str) -> AppResult<PlatformApp> {
+    if code == "teamspeak3" {
+        let path = software::discover_teamspeak()
+            .ok_or_else(|| AppError::new("SOFTWARE_NOT_INSTALLED", "未检测到 TeamSpeak 3"))?;
+        return Ok(PlatformApp {
+            platform_code: code.to_string(),
+            name: "TeamSpeak 3".to_string(),
+            executable_path: path.to_string_lossy().into_owned(),
+            arguments: vec![],
+            working_directory: path
+                .parent()
+                .map(|value| value.to_string_lossy().into_owned()),
+            prelaunch_check: false,
+        });
+    }
+    if !["perfectworld", "5e"].contains(&code) {
+        return Err(AppError::new("SOFTWARE_NOT_SUPPORTED", "不支持启动该软件"));
+    }
+    state
+        .db
+        .list_platform_apps()?
+        .into_iter()
+        .chain(steam::discover_platform_apps()?)
+        .find(|app| app.platform_code == code && Path::new(&app.executable_path).is_file())
+        .ok_or_else(|| AppError::new("SOFTWARE_NOT_INSTALLED", "未检测到该平台软件"))
+}
+
+#[tauri::command]
+fn launch_software(state: State<AppState>, code: String) -> AppResult<()> {
+    let _guard = state
+        .launch_lock
+        .try_lock()
+        .ok_or_else(|| AppError::new("LAUNCH_IN_PROGRESS", "已有程序启动任务正在进行"))?;
+    let app = resolve_software_app(&state, &code)?;
+    steam::launch_platform(&app)
+}
+
 #[tauri::command]
 fn launch_platform(
     state: State<AppState>,
@@ -972,6 +1046,7 @@ pub fn run() {
             list_download_progress,
             open_official_url,
             start_software_download,
+            launch_software,
             launch_platform,
             export_data,
             preview_import,
@@ -1066,5 +1141,46 @@ mod tests {
     fn official_login_session_times_out_at_five_minutes() {
         assert!(!login_session_timed_out(Duration::from_secs(299)));
         assert!(login_session_timed_out(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn switch_plan_starts_only_valid_platforms_linked_to_target_account() {
+        let steam = tempfile::tempdir().expect("steam root");
+        let app = |code: &str| {
+            let executable = steam.path().join(format!("{code}.exe"));
+            fs::write(&executable, []).expect("fake platform executable");
+            PlatformApp {
+                platform_code: code.into(),
+                name: code.into(),
+                executable_path: executable.to_string_lossy().into_owned(),
+                arguments: vec![],
+                working_directory: None,
+                prelaunch_check: true,
+            }
+        };
+        let link = |code: &str, status: &str| PlatformLink {
+            id: format!("{code}-{status}"),
+            steam_account_id: "account-1".into(),
+            platform_code: code.into(),
+            external_id: None,
+            display_name: None,
+            profile_url: None,
+            remark: None,
+            status: status.into(),
+            last_verified_at: None,
+        };
+
+        let plan = switch_launch_plan(
+            steam.path(),
+            &[
+                link("perfectworld", "user_confirmed"),
+                link("5e", "invalid"),
+            ],
+            &[app("perfectworld"), app("5e"), app("unlinked")],
+        );
+
+        assert!(!plan.cs2_installed);
+        assert_eq!(plan.platform_apps.len(), 1);
+        assert_eq!(plan.platform_apps[0].platform_code, "perfectworld");
     }
 }

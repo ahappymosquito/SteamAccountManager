@@ -1,5 +1,12 @@
 # Steam Account Manager
 
+## 0.3.10 切号启动联动
+
+- 未安装 CS2 时不再因配置部署失败而阻断切号，只启动 Steam。
+- 已安装 CS2 时，切号并完成 Steam 登录确认后自动启动 CS2。
+- 只启动目标 Steam 账号已关联且本机已安装的完美世界或 5E 平台，不再重启所有已配置平台。
+- 平台页检测到软件已安装后，主按钮改为“启动软件”；未安装时继续提供下载或官网入口。
+
 ## 0.3.4 官方平台图标与 Edge 打开
 
 - 平台列表改用 5E、完美世界竞技平台和 TeamSpeak 官网提供的品牌图标。
@@ -158,7 +165,7 @@ git push origin v0.1.3
 
 ## 账号切换原理
 
-切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出；若账号选择了 CFG，则先复制到 CS2 的 `game\csgo\cfg` 并校验 SHA-256，再只替换本应用此前管理的 `+exec` 参数，保留其他启动参数。通过后才创建安全备份，将目标账号设置为 `MostRecent=1` 和 `AllowAutoLogin=1`，写入注册表 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam。任一 CFG 或启动参数检查失败都会中止账号切换并记录具体原因。
+切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出；本机已安装 CS2 时，先复制所选 CFG 到 `game\csgo\cfg` 并校验 SHA-256，再只替换本应用此前管理的 `+exec` 参数，保留其他启动参数。通过后才创建安全备份，将目标账号设置为 `MostRecent=1` 和 `AllowAutoLogin=1`，写入注册表 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam；未安装 CS2 时跳过全部 CS2 配置步骤。Steam 登录确认成功后，已安装的 CS2 和目标账号有效关联的平台会一并启动。任一必要检查失败都会记录具体原因。
 
 应用会在写入后以及 Steam 稳定启动后重新检查 VDF 和注册表。只有目标账号仍为唯一的最近账号、已记住密码并允许自动登录时才记录切换成功；如果 Steam 回写或清除了这些状态，应用会提示在官方客户端重新登录并勾选“记住我”。
 

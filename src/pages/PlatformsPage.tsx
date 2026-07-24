@@ -6,6 +6,7 @@ import {
   Download,
   ExternalLink,
   FolderSearch,
+  Play,
   RefreshCw,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -44,6 +45,7 @@ export function PlatformsPage({
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [links, setLinks] = useState<Record<string, PlatformLink[]>>({});
   const [detecting, setDetecting] = useState(false);
+  const [launching, setLaunching] = useState<string>();
 
   const load = async () => {
     const [statuses, downloads, accountLinks] = await Promise.all([
@@ -144,6 +146,18 @@ export function PlatformsPage({
       } else {
         notify("error", errorMessage(error));
       }
+    }
+  };
+
+  const launch = async (item: SoftwareStatus) => {
+    setLaunching(item.code);
+    try {
+      await api.launchSoftware(item.code);
+      notify("success", `${item.name}已启动`);
+    } catch (error) {
+      notify("error", errorMessage(error));
+    } finally {
+      setLaunching(undefined);
     }
   };
 
@@ -254,21 +268,32 @@ export function PlatformsPage({
                     选择路径
                   </button>
                 )}
-                <button
-                  className="button primary"
-                  disabled={Boolean(active)}
-                  aria-label={
-                    item.code === "5e" ? "打开 5E 官网" : undefined
-                  }
-                  onClick={() => void download(item)}
-                >
-                  {item.code === "5e" ? <ExternalLink /> : <Download />}
-                  {active
-                    ? "处理中"
-                    : item.code === "5e"
-                      ? "打开官网"
-                      : "下载安装"}
-                </button>
+                {item.installed ? (
+                  <button
+                    className="button primary"
+                    disabled={launching === item.code}
+                    onClick={() => void launch(item)}
+                  >
+                    <Play />
+                    {launching === item.code ? "启动中" : "启动软件"}
+                  </button>
+                ) : (
+                  <button
+                    className="button primary"
+                    disabled={Boolean(active)}
+                    aria-label={
+                      item.code === "5e" ? "打开 5E 官网" : undefined
+                    }
+                    onClick={() => void download(item)}
+                  >
+                    {item.code === "5e" ? <ExternalLink /> : <Download />}
+                    {active
+                      ? "处理中"
+                      : item.code === "5e"
+                        ? "打开官网"
+                        : "下载安装"}
+                  </button>
+                )}
               </div>
             </article>
           );

@@ -116,6 +116,10 @@ pub fn cs2_cfg_directory(steam_dir: &Path) -> AppResult<PathBuf> {
     ))
 }
 
+pub fn is_installed(steam_dir: &Path) -> bool {
+    cs2_cfg_directory(steam_dir).is_ok()
+}
+
 fn account_id32(steam_id64: &str) -> AppResult<u64> {
     let id = steam_id64
         .parse::<u64>()
@@ -301,5 +305,13 @@ mod tests {
         fs::create_dir_all(&cfg).expect("cfg");
 
         assert_eq!(cs2_cfg_directory(steam.path()).expect("resolve"), cfg);
+        assert!(is_installed(steam.path()));
+    }
+
+    #[test]
+    fn reports_cs2_missing_without_an_install_manifest() {
+        let steam = tempfile::tempdir().expect("steam root");
+
+        assert!(!is_installed(steam.path()));
     }
 }
