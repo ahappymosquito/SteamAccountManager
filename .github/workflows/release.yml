@@ -66,10 +66,25 @@ jobs:
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
+      - name: Verify updater signing secrets
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw "Missing GitHub Actions secret: TAURI_SIGNING_PRIVATE_KEY"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            throw "Missing GitHub Actions secret: TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          }
+
       - name: Build and publish GitHub Release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: Steam Account Manager v__VERSION__
@@ -79,7 +94,9 @@ jobs:
             本工具与 Valve 或 Steam 没有官方关联。程序未进行商业代码签名，Windows SmartScreen 可能显示未知发布者提示。
           releaseDraft: false
           prerelease: false
-          args: --bundles nsis
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: --bundles nsis --config src-tauri/tauri.release.conf.json
 
       - name: Package portable edition
         shell: pwsh

@@ -105,4 +105,35 @@ describe("SettingsPage", () => {
       screen.getByRole("button", { name: "查看 Releases" }),
     ).toBeEnabled();
   });
+
+  it("shows signed update details and portable conversion action", async () => {
+    const onCheckUpdate = vi.fn();
+    const onInstallUpdate = vi.fn();
+    render(
+      <SettingsPage
+        notify={vi.fn()}
+        onConfigured={vi.fn()}
+        update={{
+          currentVersion: "0.4.3",
+          version: "0.5.0",
+          notes: "新增自动更新",
+          portable: true,
+        }}
+        updateProgress={{
+          state: "downloading",
+          downloaded: 25,
+          total: 100,
+        }}
+        onCheckUpdate={onCheckUpdate}
+        onInstallUpdate={onInstallUpdate}
+      />,
+    );
+
+    expect(await screen.findByText("v0.5.0")).toBeInTheDocument();
+    expect(screen.getByText(/当前为便携版/)).toBeInTheDocument();
+    expect(screen.getByText("正在下载 25%")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /正在更新/ }),
+    ).toBeDisabled();
+  });
 });

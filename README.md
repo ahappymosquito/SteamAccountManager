@@ -1,5 +1,11 @@
 # Steam Account Manager
 
+## 0.4.3 GitHub Release 一键更新
+
+- 启动后静默检查 GitHub 最新 Release，发现新版时提供签名校验后的下载、安装和重启流程。
+- NSIS 安装版支持原地更新；便携版可一键安装新版并转为当前用户安装版。
+- 设置页提供手动检查、Release notes 和下载进度；更新失败不会影响账号管理功能。
+
 ## 0.4.2 品牌图标与安全说明
 
 - 提亮应用图标，并统一用于 Windows 安装包、便携版、标题栏、侧栏和设置页。
@@ -154,6 +160,13 @@ cmd /c npm run package:local
 ## GitHub 自动发布
 
 main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。创建与应用版本一致的标签（例如 `v0.1.3`）并推送后，发布工作流会自动创建 GitHub Release 并上传安装包。
+
+自动更新发布还需要在仓库的 Actions Secrets 中配置：
+
+- `TAURI_SIGNING_PRIVATE_KEY`：`%USERPROFILE%\.tauri\steam-account-manager-updater.key` 的完整内容。
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：`%USERPROFILE%\.tauri\steam-account-manager-updater.password.txt` 的完整内容。
+
+私钥和密码不得提交到 Git，必须离线备份。Release 工作流会生成并上传签名、`latest.json` 和 NSIS 更新资产；缺少任一 Secret 时会在构建发布包前停止。
 
 ```powershell
 git tag v0.1.3

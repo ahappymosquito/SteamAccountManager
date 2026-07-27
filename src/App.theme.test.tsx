@@ -12,6 +12,9 @@ const windowApi = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
+  Channel: class {
+    onmessage?: (value: unknown) => void;
+  },
   invoke,
   convertFileSrc: (path: string) => `asset://${path}`,
 }));
@@ -34,7 +37,10 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function mockBackend(settings: Promise<Record<string, unknown>>) {
+function mockBackend(
+  settings: Promise<Record<string, unknown>>,
+  update: Record<string, unknown> | null = null,
+) {
   invoke.mockImplementation((command: string) => {
     if (command === "initialize_steam") {
       return Promise.resolve({
@@ -51,6 +57,7 @@ function mockBackend(settings: Promise<Record<string, unknown>>) {
     }
     if (command === "list_tags") return Promise.resolve([]);
     if (command === "set_setting") return Promise.resolve();
+    if (command === "check_app_update") return Promise.resolve(update);
     return Promise.reject(new Error(`Unexpected command: ${command}`));
   });
 }
@@ -137,5 +144,23 @@ describe("App theme lifecycle", () => {
       expect(document.documentElement.dataset.theme).toBe("violet"),
     );
     expect(localStorage.getItem("sam-theme")).toBe("violet");
+  });
+
+  it("checks silently on startup and links an available update to settings", async () => {
+    mockBackend(Promise.resolve({ theme: "glacier" }), {
+      currentVersion: "0.4.3",
+      version: "0.5.0",
+      notes: "新增自动更新",
+      portable: false,
+    });
+    render(<App />);
+
+    expect(
+      await screen.findByText("发现新版本 v0.5.0"),
+    ).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "查看详情" }));
+    expect(await screen.findByText("应用更新")).toBeInTheDocument();
+    expect(screen.getByText(/可更新至/)).toHaveTextContent("v0.5.0");
   });
 });

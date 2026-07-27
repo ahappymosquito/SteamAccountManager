@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import {
   ChevronDown,
   Database,
+  Download,
   ExternalLink,
   FolderOpen,
   GitBranch,
@@ -21,7 +22,7 @@ import {
   GITHUB_RELEASES_URL,
   GITHUB_REPOSITORY_URL,
 } from "../lib/appMeta";
-import type { AppError } from "../lib/types";
+import type { AppError, UpdateInfo, UpdateProgress } from "../lib/types";
 
 const errorMessage = (error: unknown) =>
   (error as AppError)?.message || "操作失败";
@@ -29,9 +30,19 @@ const errorMessage = (error: unknown) =>
 export function SettingsPage({
   notify,
   onConfigured,
+  update,
+  updateProgress,
+  checkingUpdate = false,
+  onCheckUpdate,
+  onInstallUpdate,
 }: {
   notify: (kind: "success" | "error", text: string) => void;
   onConfigured: () => void;
+  update?: UpdateInfo;
+  updateProgress?: UpdateProgress;
+  checkingUpdate?: boolean;
+  onCheckUpdate?: () => void;
+  onInstallUpdate?: () => void;
 }) {
   const [path, setPath] = useState("");
   const [timeout, setTimeoutValue] = useState(15);
@@ -128,6 +139,21 @@ export function SettingsPage({
       notify("error", errorMessage(error));
     }
   };
+  const updateBusy =
+    updateProgress?.state === "downloading" ||
+    updateProgress?.state === "installing";
+  const updatePercent =
+    updateProgress?.state === "downloading" && updateProgress.total
+      ? Math.min(
+          100,
+          Math.round(
+            (updateProgress.downloaded / updateProgress.total) * 100,
+          ),
+        )
+      : undefined;
+  const updateActionLabel = update?.portable
+    ? "安装新版并转为安装版"
+    : "更新并重启";
 
   return (
     <section>
@@ -205,6 +231,62 @@ export function SettingsPage({
               <ExternalLink />
               查看 Releases
             </button>
+          </div>
+        </div>
+        <div className="app-update-section" aria-live="polite">
+          <div>
+            <h3>
+              <Download />
+              应用更新
+            </h3>
+            {update ? (
+              <>
+                <p>
+                  可更新至 <strong>v{update.version}</strong>
+                  {update.portable
+                    ? "。当前为便携版，更新后将安装到当前用户目录。"
+                    : "。安装完成后应用会自动重启。"}
+                </p>
+                {update.notes && (
+                  <details className="update-notes">
+                    <summary>查看版本说明</summary>
+                    <p>{update.notes}</p>
+                  </details>
+                )}
+              </>
+            ) : (
+              <p>当前版本 v{version}，可手动检查 GitHub Release。</p>
+            )}
+            {updateProgress && updateProgress.state !== "checking" && (
+              <div className={`update-status ${updateProgress.state}`}>
+                {updateProgress.state === "downloading" &&
+                  `正在下载${updatePercent === undefined ? "" : ` ${updatePercent}%`}`}
+                {updateProgress.state === "installing" && "正在安装更新"}
+                {updateProgress.state === "completed" && "更新安装完成"}
+                {updateProgress.state === "error" &&
+                  (updateProgress.message || "更新失败，请重试")}
+              </div>
+            )}
+          </div>
+          <div className="app-update-actions">
+            <button
+              className="button secondary"
+              disabled={checkingUpdate || updateBusy}
+              onClick={onCheckUpdate}
+            >
+              <RefreshCw className={checkingUpdate ? "spin-icon" : undefined} />
+              {checkingUpdate ? "正在检查" : "检查更新"}
+            </button>
+            {update && (
+              <button
+                className="button primary"
+                disabled={updateBusy}
+                onClick={onInstallUpdate}
+              >
+                {updateBusy && <RefreshCw className="spin-icon" />}
+                {updateBusy ? "正在更新" : updateActionLabel}
+              </button>
+            )}
           </div>
         </div>
         <div className="safety-overview">

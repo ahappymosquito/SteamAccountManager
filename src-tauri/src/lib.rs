@@ -1,4 +1,5 @@
 //! Tauri application composition and validated IPC command surface.
+mod app_update;
 mod cs2;
 mod database;
 mod error;
@@ -9,6 +10,7 @@ mod steam;
 use crate::database::{validate_steam_id, Database};
 use crate::error::{AppError, AppResult};
 use crate::models::*;
+use app_update::AppUpdateState;
 use chrono::Utc;
 use parking_lot::Mutex;
 use rusqlite::{params, OptionalExtension};
@@ -987,6 +989,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -1003,6 +1006,7 @@ pub fn run() {
                 login_sessions: Mutex::new(BTreeMap::new()),
                 downloads: Arc::new(Mutex::new(BTreeMap::new())),
             });
+            app.manage(AppUpdateState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1051,7 +1055,9 @@ pub fn run() {
             export_data,
             preview_import,
             apply_import,
-            restore_latest_backup
+            restore_latest_backup,
+            app_update::check_app_update,
+            app_update::install_app_update
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Steam Account Manager");

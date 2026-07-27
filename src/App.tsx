@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { AccountAvatar } from "./components/AccountAvatar";
+import { AppUpdateBanner } from "./components/AppUpdateBanner";
 import { flushCfgDraft } from "./cfgWorkspace";
 import { AccountDrawer } from "./components/AccountDrawer";
 import { SteamLoginDialog } from "./components/SteamLoginDialog";
@@ -36,6 +37,8 @@ import type {
   SwitchLog,
   TagOption,
   Theme,
+  UpdateInfo,
+  UpdateProgress,
 } from "./lib/types";
 import { Cs2Page } from "./pages/Cs2Page";
 import { PlatformsPage } from "./pages/PlatformsPage";
@@ -70,6 +73,10 @@ export default function App() {
   const [switching, setSwitching] = useState<Account>();
   const [loginSession, setLoginSession] = useState<SteamLoginSession>();
   const [theme, setTheme] = useState<Theme>(savedTheme());
+  const [appUpdate, setAppUpdate] = useState<UpdateInfo>();
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress>();
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
 
   const notify = (kind: "success" | "error", text: string) => {
     ui.notify({ kind, text });
@@ -124,6 +131,45 @@ export default function App() {
     return () => {
       active = false;
     };
+  }, []);
+
+  const checkForUpdate = async (manual = false) => {
+    setCheckingUpdate(true);
+    if (manual) {
+      setUpdateProgress({ state: "checking", downloaded: 0 });
+    }
+    try {
+      const update = await api.checkAppUpdate();
+      setAppUpdate(update ?? undefined);
+      setUpdateDismissed(false);
+      setUpdateProgress(undefined);
+      if (manual && !update) notify("success", "当前已是最新版本");
+      return update;
+    } catch (error) {
+      setUpdateProgress(undefined);
+      if (manual) notify("error", errorMessage(error));
+      return null;
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const installUpdate = async () => {
+    if (!appUpdate) return;
+    try {
+      await api.installAppUpdate(setUpdateProgress);
+    } catch (error) {
+      setUpdateProgress({
+        state: "error",
+        downloaded: updateProgress?.downloaded ?? 0,
+        message: errorMessage(error),
+      });
+      notify("error", errorMessage(error));
+    }
+  };
+
+  useEffect(() => {
+    void checkForUpdate(false);
   }, []);
 
   const filtered = useMemo(
@@ -274,6 +320,15 @@ export default function App() {
           </div>
         </aside>
         <main className="content">
+          {appUpdate && !updateDismissed && (
+            <AppUpdateBanner
+              update={appUpdate}
+              progress={updateProgress}
+              onInstall={() => void installUpdate()}
+              onDismiss={() => setUpdateDismissed(true)}
+              onDetails={() => ui.setPage("settings")}
+            />
+          )}
           {ui.notice && (
             <div role="status" className={`notice ${ui.notice.kind}`}>
               {ui.notice.text}
@@ -309,7 +364,15 @@ export default function App() {
           )}
           {ui.page === "logs" && <LogsPage notify={notify} />}
           {ui.page === "settings" && (
-            <SettingsPage notify={notify} onConfigured={load} />
+            <SettingsPage
+              notify={notify}
+              onConfigured={load}
+              update={appUpdate}
+              updateProgress={updateProgress}
+              checkingUpdate={checkingUpdate}
+              onCheckUpdate={() => void checkForUpdate(true)}
+              onInstallUpdate={() => void installUpdate()}
+            />
           )}
         </main>
       </div>
