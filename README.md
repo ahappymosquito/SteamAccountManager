@@ -1,5 +1,11 @@
 # Steam Account Manager
 
+## 0.4.2 品牌图标与安全说明
+
+- 提亮应用图标，并统一用于 Windows 安装包、便携版、标题栏、侧栏和设置页。
+- 设置页展示当前安装版本、GitHub 仓库及 Releases 入口，不会在后台请求 GitHub API。
+- README 与设置页补充账号切换原理、凭据边界和封禁风险说明。
+
 ## 0.4.0 切号启动联动
 
 - 未安装 CS2 时不再因配置部署失败而阻断切号，只启动 Steam。
@@ -92,9 +98,15 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 
 ## 安全与隐私
 
-本工具不会保存 Steam 密码、Steam Guard 密钥、`shared_secret`、`identity_secret`、Cookie、Session Token 或浏览器数据，不会模拟登录、绕过 Steam Guard、读取进程内存、注入客户端或调用第三方私有 API。它只能切换 Steam 已经记住且本机仍有效的登录状态；状态失效时，用户必须在 Steam 官方客户端完成登录或 Steam Guard 验证。
+本工具只处理 Steam 官方客户端已记住且本机仍有效的登录状态，不参与账号认证。它不会保存 Steam 密码、Steam Guard 密钥、`shared_secret`、`identity_secret`、Cookie、Session Token 或浏览器数据，不会模拟登录、绕过 Steam Guard、读取或修改进程内存、向 Steam 或游戏注入代码、干预反作弊系统，也不会调用第三方私有 API。状态失效时，用户必须在 Steam 官方客户端完成登录或 Steam Guard 验证。
 
 日志不会记录完整注册表、完整 VDF 内容或认证数据。Steam 登录名在日志中默认脱敏。导入器递归拒绝包含 password、cookie、token、secret、Steam Guard 等危险键名的数据。
+
+### 会不会导致 Steam 封禁？
+
+现有实现不包含通常与作弊封禁相关的进程注入、内存修改、游戏自动化、认证绕过或反作弊干预。账号切换发生在 Steam 关闭后，只修改 Steam 官方客户端自身使用的本地注册表项和 `config/loginusers.vdf`，修改前创建备份，写入后重新校验，再由官方客户端正常启动。
+
+因此，本工具的风险面与作弊程序不同。但本项目不是 Valve 官方产品，不能代表 Valve 对任何第三方工具作出“绝对不会封禁”的保证。Steam 客户端、本地配置格式或平台规则发生变化时，请暂停使用并查看 [GitHub Releases](https://github.com/ahappymosquito/SteamAccountManager/releases) 是否有兼容更新；涉及账号认证时，只在 Steam 官方客户端内操作。
 
 ## 技术栈
 

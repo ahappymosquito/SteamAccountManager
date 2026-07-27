@@ -3,6 +3,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Minus, Palette, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { MouseEvent } from "react";
+import { APP_ICON_PATH, APP_NAME } from "../lib/appMeta";
 import type { Theme } from "../lib/types";
 import { themes } from "../lib/themes";
 
@@ -14,7 +15,7 @@ export function TitleBar({theme,onThemeChange}:{theme:Theme;onThemeChange:(theme
   };
   const toggleMaximize=()=>void appWindow.toggleMaximize();
   return <header className="window-titlebar">
-    <div className="window-title" onMouseDown={startDrag} onDoubleClick={toggleMaximize}><img src="/favicon.svg" alt=""/><span>Steam Account Manager</span></div>
+    <div className="window-title" onMouseDown={startDrag} onDoubleClick={toggleMaximize}><img src={APP_ICON_PATH} alt=""/><span>{APP_NAME}</span></div>
     <div className="window-drag-space" onMouseDown={startDrag} onDoubleClick={toggleMaximize}/>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild><button className="titlebar-button theme-trigger" aria-label="切换主题"><Palette/></button></DropdownMenu.Trigger>

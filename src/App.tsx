@@ -23,6 +23,7 @@ import { SwitchDialog } from "./components/SwitchDialog";
 import { TagFilter } from "./components/TagFilter";
 import { TitleBar } from "./components/TitleBar";
 import { api } from "./lib/api";
+import { APP_ICON_PATH } from "./lib/appMeta";
 import { filterAccounts } from "./lib/filter";
 import { applyTheme, resolveTheme, savedTheme, storedTheme } from "./lib/themes";
 import type {
@@ -229,7 +230,7 @@ export default function App() {
       <div className="app-body">
         <aside className="sidebar">
           <div className="brand">
-            <ShieldCheck />
+            <img className="brand-logo" src={APP_ICON_PATH} alt="" />
             <div>
               <strong>Steam Account</strong>
               <span>Manager · 非官方工具</span>

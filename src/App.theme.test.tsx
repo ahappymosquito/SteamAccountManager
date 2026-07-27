@@ -1,4 +1,4 @@
-/** Integration tests for user-driven theme changes and asynchronous restoration. */
+/** Integration tests for application branding, theme changes, and asynchronous restoration. */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -75,7 +75,12 @@ describe("App theme lifecycle", () => {
   it("applies and saves a theme selected from the title bar", async () => {
     const settings = deferred<Record<string, unknown>>();
     mockBackend(settings.promise);
-    render(<App />);
+    const { container } = render(<App />);
+
+    expect(container.querySelector(".brand-logo")).toHaveAttribute(
+      "src",
+      "/app-icon.png",
+    );
 
     await chooseTheme("薄荷白");
 
