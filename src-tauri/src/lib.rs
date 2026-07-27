@@ -301,6 +301,16 @@ async fn query_player_data(
 
     match fetched {
         Ok((snapshot, token_expired)) => {
+            state.db.save_link(&PlatformLinkInput {
+                id: Some(link.id.clone()),
+                steam_account_id: link.steam_account_id.clone(),
+                platform_code: link.platform_code.clone(),
+                external_id: Some(snapshot.external_id.clone()),
+                display_name: snapshot.nickname.clone().or(link.display_name.clone()),
+                profile_url: link.profile_url.clone(),
+                remark: link.remark.clone(),
+                status: "user_confirmed".to_string(),
+            })?;
             state.db.set_setting(
                 "credential.5e.expired",
                 if token_expired { "true" } else { "false" },
