@@ -1,5 +1,11 @@
 # Steam Account Manager
 
+## 0.6.3 完美平台 SteamID 自动匹配
+
+- 配置完美平台 Access Token 后，账号详情会直接使用现有 SteamID64 自动建立或补全完美平台关联，无需填写额外平台 ID。
+- 账号主页的平台徽标显示已缓存的 5E / 完美段位和分数；完美分数明确标注为“赛季记录分数”，不冒充实时官方值。
+- 5E 与完美凭据分别存入 Windows 凭据管理器；完美未配置 Token 时不发起平台请求，并保留普通平台关联能力。
+
 ## 0.6.2 5E 名称查询与平台关联编辑
 
 - 5E 玩家查询支持唯一玩家名称、主页 ID和完整主页链接；名称只接受完全匹配或唯一的大小写不敏感匹配，不采用模糊结果。
@@ -112,8 +118,9 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 - 通过 Steam 官方登录窗口添加账号，只展示已勾选“记住我”的账号
 - 独立管理完美世界、5E 与 TeamSpeak 3 的安装检测和官方下载
 - 管理多个 CS2 CFG 方案，并按 Steam 账号在切换前复制、校验和更新 `+exec` 启动参数
-- 手工关联完美世界、5E、FACEIT 或其他平台账号
+- 手工关联完美世界、5E、FACEIT 或其他平台账号；完美平台可按 SteamID64 自动匹配
 - 在账号详情验证 5E 玩家名称、主页 ID或完整主页链接，并查看近期段位、比赛与聚合战绩
+- 在账号主页查看已缓存的 5E / 完美段位分数
 - 在明确确认后关闭 Steam、备份配置、切换账号并重新启动
 - 判断本地确认、当前推测、Steam 未运行和未知状态
 - 配置并直接启动第三方平台程序，不经过 shell
@@ -125,6 +132,8 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 本工具只处理 Steam 官方客户端已记住且本机仍有效的登录状态，不参与 Steam 账号认证。它不会保存 Steam 密码、Steam Guard 密钥、`shared_secret`、`identity_secret`、Cookie、Steam Session Token 或浏览器数据，不会模拟登录、绕过 Steam Guard、读取或修改进程内存、向 Steam 或游戏注入代码或干预反作弊系统。状态失效时，用户必须在 Steam 官方客户端完成登录或 Steam Guard 验证。
 
 5E 玩家查询使用其非公开网页数据接口，可能随平台调整而失效。ELO 来自最近一场已完成比赛的 `origin_elo + change_elo`，界面明确标注为“最近比赛后 ELO”，不代表官方实时值。可选的 5E Bearer Token 仅保存在 Windows 凭据管理器，不写入 SQLite、日志、缓存、导入导出或错误文本；匿名查询仍可工作，401/403 时会保留凭据并自动降级。应用只缓存规范化结果，不保存平台原始 JSON。
+
+完美平台同样使用非公开网页接口。SteamID64 可直接作为目标玩家标识，但查询需要 Access Token；应用只读取无需私有 signer 的赛季记录接口，分数标注为“赛季记录分数”，不承诺实时性。Token 与 5E 凭据隔离存放于 Windows 凭据管理器，未配置时不会发起完美平台玩家查询。接口研究与字段边界见 `docs/perfect-world-player-query-research.md`。
 
 日志不会记录完整注册表、完整 VDF 内容或认证数据。Steam 登录名在日志中默认脱敏。导入器递归拒绝包含 password、cookie、token、secret、Steam Guard 等危险键名的数据。
 

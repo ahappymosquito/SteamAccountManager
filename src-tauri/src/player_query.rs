@@ -1,4 +1,4 @@
-//! Unified player-query module with the 5E adapter, aggregation, and secure credentials.
+//! Unified player-query module with 5E and Perfect World adapters, aggregation, and secure credentials.
 use crate::error::{AppError, AppResult};
 use crate::models::{PlatformCredentialStatus, PlayerMatch, PlayerSnapshot, PlayerStats};
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
@@ -14,8 +14,13 @@ const FIVE_E_ID_TRANSFER: &str =
 const FIVE_E_PROFILE: &str = "https://gate.5eplay.com/userinterface/http/v1/userinterface/header";
 const FIVE_E_DATA: &str = "https://gate.5eplay.com/crane/http/api/data";
 const FIVE_E_SEARCH: &str = "https://arena.5eplay.com/api/search/player/1/16";
+const PERFECT_WORLD_USER_INFO: &str = "https://pwaweblogin.wmpvp.com/user-info";
+const PERFECT_WORLD_SEASON_LADDER: &str =
+    "https://pwaweblogin.wmpvp.com/user-info/season-ladder-score-list";
+const PERFECT_WORLD_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; WOW64) \
+    AppleWebKit/537.36 (KHTML, like Gecko) perfectworldarena/1.0.26051411 \
+    Chrome/80.0.3987.163 Electron/8.5.5 Safari/537.36";
 const CREDENTIAL_SERVICE: &str = "Steam Account Manager";
-const CREDENTIAL_USER: &str = "5e-bearer-token";
 const MATCH_LIMIT: usize = 20;
 
 #[derive(Debug)]
@@ -35,19 +40,23 @@ pub struct PlayerQuery {
     client: Client,
     id_transfer_url: String,
     search_url: String,
+    perfect_world_user_info_url: String,
+    perfect_world_season_ladder_url: String,
 }
 
 impl PlayerQuery {
     pub fn new() -> AppResult<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(15))
-            .user_agent("SteamAccountManager/0.6.2")
+            .user_agent("SteamAccountManager/0.6.3")
             .build()
             .map_err(|_| AppError::new("PLAYER_HTTP_INIT_FAILED", "无法初始化玩家数据网络连接"))?;
         Ok(Self {
             client,
             id_transfer_url: FIVE_E_ID_TRANSFER.to_string(),
             search_url: FIVE_E_SEARCH.to_string(),
+            perfect_world_user_info_url: PERFECT_WORLD_USER_INFO.to_string(),
+            perfect_world_season_ladder_url: PERFECT_WORLD_SEASON_LADDER.to_string(),
         })
     }
 
@@ -189,6 +198,213 @@ impl PlayerQuery {
                 stale: false,
             },
             token_expired,
+        ))
+    }
+
+    pub fn query_perfect_world(
+        &self,
+        steam_id64: &str,
+        token: Option<&str>,
+    ) -> AppResult<(PlayerSnapshot, bool)> {
+        let steam_id64 = steam_id64.trim();
+        if steam_id64.len() != 17 || !steam_id64.chars().all(|value| value.is_ascii_digit()) {
+            return Err(AppError::new(
+                "PLAYER_ID_INVALID",
+                "完美平台自动匹配需要有效的 17 位 SteamID64",
+            ));
+        }
+        let token = token
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::new(
+                    "PLAYER_CREDENTIAL_REQUIRED",
+                    "请先在设置中配置完美平台 Access Token",
+                )
+            })?;
+
+        let user_info = self.perfect_world_json(
+            Url::parse(&self.perfect_world_user_info_url)
+                .map_err(|_| AppError::new("PLAYER_URL_INVALID", "完美玩家资料地址无效"))?,
+            steam_id64,
+            token,
+            true,
+        )?;
+        let current_season =
+            recursive_text(user_info.get("data").unwrap_or(&user_info), &["season"]);
+        let season_url = Url::parse_with_params(
+            &self.perfect_world_season_ladder_url,
+            [("access_token", token), ("uid", steam_id64)],
+        )
+        .map_err(|_| AppError::new("PLAYER_URL_INVALID", "完美赛季分数地址无效"))?;
+        let season_response = self.perfect_world_json(season_url, steam_id64, token, false)?;
+        let records = match_list(&season_response);
+        let selected = current_season
+            .as_deref()
+            .and_then(|season| {
+                records.iter().find(|record| {
+                    value_text(record.get("season"))
+                        .is_some_and(|value| value.eq_ignore_ascii_case(season))
+                })
+            })
+            .or_else(|| records.first());
+
+        let score = selected.and_then(|record| {
+            ["score", "ladder_score", "ladderScore"]
+                .iter()
+                .find_map(|key| value_number(record.get(*key)))
+        });
+        let rank_name = selected.and_then(|record| {
+            ["rank_name", "rankName", "level_name", "levelName"]
+                .iter()
+                .find_map(|key| value_text(record.get(*key)))
+        });
+        let profile_data = user_info.get("data").unwrap_or(&user_info);
+        let nickname = recursive_text(
+            profile_data,
+            &["steam_nick", "nickname", "username", "nick_name"],
+        );
+        let avatar_url = recursive_text(
+            profile_data,
+            &["avatar", "avatar_url", "avatarUrl", "avatar_full"],
+        );
+        let mut warnings = Vec::new();
+        if selected.is_none() {
+            warnings
+                .push("完美平台未返回可用的赛季记录，可能尚未参加天梯或接口结构已变化".to_string());
+        } else if score.is_none() && rank_name.is_none() {
+            warnings.push("已按 SteamID 匹配完美账号，但赛季记录中没有段位或分数字段".to_string());
+        }
+        let mut capabilities = vec![
+            "steamid_auto_match".to_string(),
+            "authenticated".to_string(),
+        ];
+        if selected.is_some() {
+            capabilities.push("season_ladder".to_string());
+        }
+
+        Ok((
+            PlayerSnapshot {
+                platform: "perfectworld".to_string(),
+                external_id: steam_id64.to_string(),
+                nickname,
+                avatar_url,
+                rank_name,
+                elo: score,
+                elo_source: score.map(|_| "latest_season_record".to_string()),
+                stats: PlayerStats {
+                    sample_size: 0,
+                    kills: 0,
+                    deaths: 0,
+                    kd: None,
+                    rating: None,
+                    adr: None,
+                    headshot_rate: None,
+                    win_rate: None,
+                },
+                recent_matches: Vec::new(),
+                capabilities,
+                warnings,
+                fetched_at: Utc::now().to_rfc3339(),
+                stale: false,
+            },
+            false,
+        ))
+    }
+
+    fn perfect_world_json(
+        &self,
+        url: Url,
+        steam_id64: &str,
+        token: &str,
+        post: bool,
+    ) -> AppResult<Value> {
+        let mut last_status = None;
+        for attempt in 0..3 {
+            let request = if post {
+                self.client.post(url.clone())
+            } else {
+                self.client.get(url.clone())
+            }
+            .header("pwasteamid", steam_id64)
+            .header("PwaSteamId", steam_id64)
+            .header("x-pwa-steamid", steam_id64)
+            .header("Referer", "https://client.wmpvp.com/")
+            .header("User-Agent", PERFECT_WORLD_USER_AGENT)
+            .header("Cookie", format!("steam_cn_token={token}"));
+            match request.send() {
+                Ok(response)
+                    if matches!(
+                        response.status(),
+                        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+                    ) =>
+                {
+                    return Err(AppError::new(
+                        "PLAYER_CREDENTIAL_EXPIRED",
+                        "完美平台 Access Token 已失效，请在设置中替换",
+                    ));
+                }
+                Ok(response) if response.status() == StatusCode::TOO_MANY_REQUESTS => {
+                    let delay = response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .unwrap_or(1)
+                        .min(5);
+                    thread::sleep(Duration::from_secs(delay));
+                    last_status = Some(StatusCode::TOO_MANY_REQUESTS);
+                }
+                Ok(response) if response.status().is_server_error() => {
+                    last_status = Some(response.status());
+                    thread::sleep(Duration::from_millis(250 * (attempt + 1) as u64));
+                }
+                Ok(response) if !response.status().is_success() => {
+                    return Err(AppError::new(
+                        "PLAYER_REMOTE_REJECTED",
+                        format!("完美平台数据服务返回 HTTP {}", response.status().as_u16()),
+                    ));
+                }
+                Ok(response) => {
+                    let value = response.json::<Value>().map_err(|_| {
+                        AppError::new(
+                            "PLAYER_RESPONSE_INVALID",
+                            "完美平台返回了无法识别的数据格式",
+                        )
+                    })?;
+                    if value_number(value.get("code"))
+                        .is_some_and(|code| code == 401.0 || code == 403.0)
+                    {
+                        return Err(AppError::new(
+                            "PLAYER_CREDENTIAL_EXPIRED",
+                            "完美平台 Access Token 已失效，请在设置中替换",
+                        ));
+                    }
+                    return Ok(value);
+                }
+                Err(error) => {
+                    if error.is_timeout() || error.is_connect() {
+                        thread::sleep(Duration::from_millis(250 * (attempt + 1) as u64));
+                        continue;
+                    }
+                    return Err(AppError::new(
+                        "PLAYER_NETWORK_FAILED",
+                        "无法连接完美平台数据服务",
+                    ));
+                }
+            }
+        }
+        Err(AppError::new(
+            if last_status == Some(StatusCode::TOO_MANY_REQUESTS) {
+                "PLAYER_RATE_LIMITED"
+            } else {
+                "PLAYER_NETWORK_FAILED"
+            },
+            if last_status == Some(StatusCode::TOO_MANY_REQUESTS) {
+                "完美平台查询过于频繁，请稍后重试"
+            } else {
+                "完美平台数据服务暂时不可用"
+            },
         ))
     }
 
@@ -476,54 +692,77 @@ impl PlayerQuery {
 }
 
 pub fn save_credential(platform_code: &str, token: Option<&str>) -> AppResult<()> {
-    if platform_code != "5e" {
+    if !matches!(platform_code, "5e" | "perfectworld") {
         return Err(AppError::new(
             "PLAYER_PLATFORM_UNSUPPORTED",
             "该平台暂不支持玩家数据凭据",
         ));
     }
-    let entry = credential_entry()?;
+    let entry = credential_entry(platform_code)?;
+    let platform_name = if platform_code == "5e" {
+        "5E"
+    } else {
+        "完美平台"
+    };
     match token.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) => entry.set_password(value).map_err(|_| {
             AppError::new(
                 "CREDENTIAL_SAVE_FAILED",
-                "无法将 5E Token 保存到 Windows 凭据管理器",
+                format!("无法将 {platform_name} Token 保存到 Windows 凭据管理器"),
             )
         }),
         None => match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(AppError::new(
                 "CREDENTIAL_DELETE_FAILED",
-                "无法从 Windows 凭据管理器删除 5E Token",
+                format!("无法从 Windows 凭据管理器删除 {platform_name} Token"),
             )),
         },
     }
 }
 
 pub fn load_credential(platform_code: &str) -> AppResult<Option<String>> {
-    if platform_code != "5e" {
+    if !matches!(platform_code, "5e" | "perfectworld") {
         return Ok(None);
     }
-    match credential_entry()?.get_password() {
+    let platform_name = if platform_code == "5e" {
+        "5E"
+    } else {
+        "完美平台"
+    };
+    match credential_entry(platform_code)?.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(_) => Err(AppError::new(
             "CREDENTIAL_READ_FAILED",
-            "无法读取 Windows 凭据管理器中的 5E Token",
+            format!("无法读取 Windows 凭据管理器中的 {platform_name} Token"),
         )),
     }
 }
 
-pub fn credential_status(expired: bool) -> AppResult<PlatformCredentialStatus> {
+pub fn credential_status(
+    platform_code: &str,
+    expired: bool,
+) -> AppResult<PlatformCredentialStatus> {
     Ok(PlatformCredentialStatus {
-        platform_code: "5e".to_string(),
-        configured: load_credential("5e")?.is_some(),
+        platform_code: platform_code.to_string(),
+        configured: load_credential(platform_code)?.is_some(),
         expired,
     })
 }
 
-fn credential_entry() -> AppResult<Entry> {
-    Entry::new(CREDENTIAL_SERVICE, CREDENTIAL_USER)
+fn credential_entry(platform_code: &str) -> AppResult<Entry> {
+    let credential_user = match platform_code {
+        "5e" => "5e-bearer-token",
+        "perfectworld" => "perfectworld-access-token",
+        _ => {
+            return Err(AppError::new(
+                "PLAYER_PLATFORM_UNSUPPORTED",
+                "该平台暂不支持玩家数据凭据",
+            ))
+        }
+    };
+    Entry::new(CREDENTIAL_SERVICE, credential_user)
         .map_err(|_| AppError::new("CREDENTIAL_INIT_FAILED", "无法访问 Windows 凭据管理器"))
 }
 
@@ -806,6 +1045,8 @@ mod tests {
             client: Client::builder().no_proxy().build().expect("query client"),
             id_transfer_url: super::FIVE_E_ID_TRANSFER.to_string(),
             search_url: super::FIVE_E_SEARCH.to_string(),
+            perfect_world_user_info_url: super::PERFECT_WORLD_USER_INFO.to_string(),
+            perfect_world_season_ladder_url: super::PERFECT_WORLD_SEASON_LADDER.to_string(),
         }
     }
 
@@ -882,6 +1123,36 @@ mod tests {
         assert_eq!(match_list(&payload)[0]["match_id"], 42);
         assert_eq!(value_bool(Some(&json!("1"))), Some(true));
         assert_eq!(value_bool(Some(&json!(0))), Some(false));
+    }
+
+    #[test]
+    fn perfect_world_uses_steam_id_and_maps_season_rank_score() {
+        let (url, requests) = serve(vec![
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 60\r\nConnection: close\r\n\r\n{\"data\":{\"season\":\"S24\",\"steam_nick\":\"Player\",\"avatar\":\"a\"}}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 76\r\nConnection: close\r\n\r\n{\"data\":[{\"season\":\"S24\",\"score\":\"1888\",\"rank_name\":\"B+\",\"match_count\":12}]}",
+        ]);
+        let mut query = test_query();
+        query.perfect_world_user_info_url = url.to_string();
+        query.perfect_world_season_ladder_url = url.to_string();
+
+        let (snapshot, expired) = query
+            .query_perfect_world("76561198159976336", Some("secret-token"))
+            .expect("perfect world snapshot");
+
+        assert!(!expired);
+        assert_eq!(snapshot.external_id, "76561198159976336");
+        assert_eq!(snapshot.nickname.as_deref(), Some("Player"));
+        assert_eq!(snapshot.rank_name.as_deref(), Some("B+"));
+        assert_eq!(snapshot.elo, Some(1888.0));
+        assert_eq!(snapshot.elo_source.as_deref(), Some("latest_season_record"));
+        let profile_request = requests.recv().expect("profile request");
+        let season_request = requests.recv().expect("season request");
+        assert!(profile_request.starts_with("POST /data "));
+        assert!(profile_request
+            .to_ascii_lowercase()
+            .contains("pwasteamid: 76561198159976336"));
+        assert!(season_request.contains("uid=76561198159976336"));
+        assert!(season_request.contains("access_token=secret-token"));
     }
 
     #[test]

@@ -58,6 +58,9 @@ export function SettingsPage({
   const [fiveEToken, setFiveEToken] = useState("");
   const [fiveEStatus, setFiveEStatus] = useState<PlatformCredentialStatus>();
   const [savingFiveE, setSavingFiveE] = useState(false);
+  const [perfectWorldToken, setPerfectWorldToken] = useState("");
+  const [perfectWorldStatus, setPerfectWorldStatus] = useState<PlatformCredentialStatus>();
+  const [savingPerfectWorld, setSavingPerfectWorld] = useState(false);
 
   useEffect(() => {
     void api
@@ -69,6 +72,7 @@ export function SettingsPage({
       .catch(() => {});
     void getVersion().then(setVersion).catch(() => setVersion("未知"));
     void api.platformCredentialStatus("5e").then(setFiveEStatus).catch(() => {});
+    void api.platformCredentialStatus("perfectworld").then(setPerfectWorldStatus).catch(() => {});
   }, []);
 
   const choose = async () => {
@@ -129,6 +133,19 @@ export function SettingsPage({
       notify("error", errorMessage(error));
     } finally {
       setSavingFiveE(false);
+    }
+  };
+  const savePerfectWorldToken = async (remove = false) => {
+    setSavingPerfectWorld(true);
+    try {
+      await api.savePlatformCredential("perfectworld", remove ? undefined : perfectWorldToken);
+      setPerfectWorldToken("");
+      setPerfectWorldStatus(await api.platformCredentialStatus("perfectworld"));
+      notify("success", remove ? "完美平台 Token 已删除" : "完美平台 Token 已安全保存");
+    } catch (error) {
+      notify("error", errorMessage(error));
+    } finally {
+      setSavingPerfectWorld(false);
     }
   };
   const exportJson = async () => {
@@ -276,6 +293,55 @@ export function SettingsPage({
             >
               <Trash2 />
               删除 Token
+            </button>
+          )}
+        </div>
+      </section>
+      <section className="fivee-credential" aria-labelledby="perfectworld-credential-title">
+        <div className="section-heading">
+          <h2 id="perfectworld-credential-title">
+            <KeyRound />
+            完美平台查询凭据
+          </h2>
+          <p>
+            配置后，账号详情会使用 SteamID64 自动匹配完美平台，并读取赛季记录段位与分数。Token 仅保存在 Windows 凭据管理器。
+          </p>
+        </div>
+        <div className="credential-status" role="status">
+          <span className={perfectWorldStatus?.configured ? "configured" : ""} />
+          {perfectWorldStatus?.configured
+            ? perfectWorldStatus.expired
+              ? "已配置，但可能已经过期"
+              : "已安全配置，可自动匹配"
+            : "未配置，暂不发起完美平台查询"}
+        </div>
+        <label>
+          Access Token
+          <input
+            type="password"
+            autoComplete="off"
+            value={perfectWorldToken}
+            placeholder={perfectWorldStatus?.configured ? "输入新 Token 可替换现有凭据" : "查询完美平台数据时必需"}
+            onChange={(event) => setPerfectWorldToken(event.target.value)}
+          />
+        </label>
+        <div className="credential-actions">
+          <button
+            className="button primary"
+            disabled={savingPerfectWorld || !perfectWorldToken.trim()}
+            onClick={() => void savePerfectWorldToken()}
+          >
+            <Save />
+            {savingPerfectWorld ? "正在保存" : "保存完美 Token"}
+          </button>
+          {perfectWorldStatus?.configured && (
+            <button
+              className="button danger"
+              disabled={savingPerfectWorld}
+              onClick={() => void savePerfectWorldToken(true)}
+            >
+              <Trash2 />
+              删除完美 Token
             </button>
           )}
         </div>

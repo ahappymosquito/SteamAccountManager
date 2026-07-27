@@ -13,6 +13,7 @@
 .avatar.neutral{background:var(--raised);color:var(--ink);border:1px solid var(--line)}
 .avatar.large{width:58px;height:58px;border-radius:12px;font-size:18px}
 .account-row.clickable{cursor:pointer}.account-row.clickable:focus-within{background:var(--selected)}
+.platform-badge:not(.muted){font-weight:600}
 .stable-action{min-width:104px}.compact-label{display:none}
 .tag-filter-wrap{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.button.secondary.active{border-color:var(--primary);background:var(--selected)}
 .filter-chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;background:var(--selected);color:var(--ink);padding:5px 8px;font-size:11px;cursor:pointer}.filter-chip svg{width:12px;height:12px}

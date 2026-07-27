@@ -2,7 +2,7 @@
 use crate::error::{AppError, AppResult};
 use crate::models::{
     Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, LocalSteamAccount, PlatformApp,
-    PlatformLink, PlatformLinkInput, ProfileInput, TagOption,
+    PlatformLink, PlatformLinkInput, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -86,6 +86,7 @@ impl Database {
                 favorite: r.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
                 tags: Vec::new(),
                 platform_codes: Vec::new(),
+                player_ranks: Vec::new(),
                 avatar_path: None,
             })
         })?;
@@ -99,8 +100,49 @@ impl Database {
             account.platform_codes = platforms
                 .query_map([&account.id], |r| r.get(0))?
                 .collect::<Result<_, _>>()?;
+            let mut ranks = conn.prepare(
+                "SELECT p.platform_code,c.snapshot_json,c.expires_at
+                 FROM account_platform_links l
+                 JOIN platform_accounts p ON p.id=l.platform_account_id
+                 JOIN player_snapshot_cache c ON c.platform_link_id=l.id
+                 WHERE l.steam_account_id=?1
+                 ORDER BY p.platform_code",
+            )?;
+            account.player_ranks = ranks
+                .query_map([&account.id], |row| {
+                    let platform: String = row.get(0)?;
+                    let payload: String = row.get(1)?;
+                    let expires_at: String = row.get(2)?;
+                    let snapshot = serde_json::from_str::<PlayerSnapshot>(&payload).ok();
+                    Ok(snapshot.map(|snapshot| PlayerRankSummary {
+                        platform,
+                        rank_name: snapshot.rank_name,
+                        score: snapshot.elo,
+                        score_source: snapshot.elo_source,
+                        stale: snapshot.stale
+                            || chrono::DateTime::parse_from_rfc3339(&expires_at)
+                                .is_ok_and(|expires| expires <= Utc::now()),
+                    }))
+                })?
+                .filter_map(|result| result.transpose())
+                .collect::<Result<_, _>>()?;
         }
         Ok(accounts)
+    }
+
+    pub fn account_identity(
+        &self,
+        account_id: &str,
+    ) -> AppResult<Option<(String, Option<String>)>> {
+        Ok(self
+            .0
+            .lock()
+            .query_row(
+                "SELECT steam_id64,persona_name FROM steam_accounts WHERE id=?1",
+                [account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
     }
 
     pub fn list_tags(&self) -> AppResult<Vec<TagOption>> {

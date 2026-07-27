@@ -80,4 +80,26 @@ describe("PlayerDataPanel", () => {
       expect(mocks.playerData).toHaveBeenLastCalledWith("link-5e", true),
     );
   });
+
+  it("labels Perfect World scores as season records without inventing match stats", async () => {
+    mocks.playerData.mockResolvedValue({
+      ...snapshot,
+      platform: "perfectworld",
+      externalId: "76561198000000001",
+      rankName: "B+",
+      elo: 1888,
+      eloSource: "latest_season_record",
+      stats: { sampleSize: 0, kills: 0, deaths: 0 },
+      recentMatches: [],
+      warnings: [],
+      stale: false,
+    });
+    render(<PlayerDataPanel link={{ ...link, platformCode: "perfectworld" }} />);
+
+    expect(await screen.findByText("赛季记录分数")).toBeInTheDocument();
+    expect(screen.getByText("1888")).toBeInTheDocument();
+    expect(screen.getByText("按 SteamID 自动匹配")).toBeInTheDocument();
+    expect(screen.queryByText("KD")).not.toBeInTheDocument();
+    expect(screen.queryByText("最近比赛")).not.toBeInTheDocument();
+  });
 });

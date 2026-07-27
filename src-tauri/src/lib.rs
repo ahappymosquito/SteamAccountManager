@@ -258,7 +258,7 @@ async fn query_player_data(
         .db
         .platform_link(&platform_link_id)?
         .ok_or_else(|| AppError::new("PLATFORM_LINK_NOT_FOUND", "平台关联不存在"))?;
-    if link.platform_code != "5e" {
+    if !matches!(link.platform_code.as_str(), "5e" | "perfectworld") {
         return Err(AppError::new(
             "PLAYER_PLATFORM_UNSUPPORTED",
             "该平台暂不支持玩家数据查询",
@@ -269,7 +269,7 @@ async fn query_player_data(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::new("PLAYER_ID_MISSING", "请先填写 5E 玩家 ID"))?
+        .ok_or_else(|| AppError::new("PLAYER_ID_MISSING", "请先填写平台玩家标识"))?
         .to_string();
     let cached =
         state
@@ -290,17 +290,28 @@ async fn query_player_data(
         }
     }
 
-    let token = player_query::load_credential("5e")?;
+    let platform_code = link.platform_code.clone();
+    let token = player_query::load_credential(&platform_code)?;
     let query_external_id = external_id.clone();
     let query_token = token.clone();
     let fetched = tauri::async_runtime::spawn_blocking(move || {
-        player_query::PlayerQuery::new()?.query_five_e(&query_external_id, query_token.as_deref())
+        let query = player_query::PlayerQuery::new()?;
+        match platform_code.as_str() {
+            "5e" => query.query_five_e(&query_external_id, query_token.as_deref()),
+            "perfectworld" => query.query_perfect_world(&query_external_id, query_token.as_deref()),
+            _ => unreachable!(),
+        }
     })
     .await
     .map_err(|_| AppError::new("PLAYER_QUERY_FAILED", "玩家数据后台查询失败"))?;
 
     match fetched {
         Ok((snapshot, token_expired)) => {
+            let verified = snapshot.platform != "perfectworld"
+                || snapshot
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == "season_ladder");
             state.db.save_link(&PlatformLinkInput {
                 id: Some(link.id.clone()),
                 steam_account_id: link.steam_account_id.clone(),
@@ -309,10 +320,14 @@ async fn query_player_data(
                 display_name: snapshot.nickname.clone().or(link.display_name.clone()),
                 profile_url: link.profile_url.clone(),
                 remark: link.remark.clone(),
-                status: "user_confirmed".to_string(),
+                status: if verified {
+                    "user_confirmed".to_string()
+                } else {
+                    "unverified".to_string()
+                },
             })?;
             state.db.set_setting(
-                "credential.5e.expired",
+                &format!("credential.{}.expired", link.platform_code),
                 if token_expired { "true" } else { "false" },
             )?;
             let expires_at = (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
@@ -327,6 +342,12 @@ async fn query_player_data(
             Ok(snapshot)
         }
         Err(error) => {
+            if error.code == "PLAYER_CREDENTIAL_EXPIRED" {
+                state.db.set_setting(
+                    &format!("credential.{}.expired", link.platform_code),
+                    "true",
+                )?;
+            }
             if let Some((mut snapshot, _)) = cached {
                 snapshot.stale = true;
                 snapshot
@@ -341,14 +362,73 @@ async fn query_player_data(
 }
 
 #[tauri::command]
+async fn auto_link_perfectworld(
+    state: State<'_, AppState>,
+    steam_account_id: String,
+    force_refresh: bool,
+) -> AppResult<PlayerSnapshot> {
+    let (steam_id64, persona_name) = state
+        .db
+        .account_identity(&steam_account_id)?
+        .ok_or_else(|| AppError::new("ACCOUNT_NOT_FOUND", "Steam 账号不存在"))?;
+    validate_steam_id(&steam_id64)?;
+    if let Some(link) = state
+        .db
+        .list_links(&steam_account_id)?
+        .into_iter()
+        .find(|link| link.platform_code == "perfectworld")
+    {
+        if link.external_id.as_deref().map(str::trim) != Some(steam_id64.as_str()) {
+            state.db.save_link(&PlatformLinkInput {
+                id: Some(link.id.clone()),
+                steam_account_id: link.steam_account_id.clone(),
+                platform_code: link.platform_code.clone(),
+                external_id: Some(steam_id64),
+                display_name: link.display_name.clone().or(persona_name),
+                profile_url: link.profile_url.clone(),
+                remark: link.remark.clone(),
+                status: "unverified".to_string(),
+            })?;
+        }
+        return query_player_data(state, link.id, force_refresh).await;
+    }
+    if player_query::load_credential("perfectworld")?.is_none() {
+        return Err(AppError::new(
+            "PLAYER_CREDENTIAL_REQUIRED",
+            "请先在设置中配置完美平台 Access Token",
+        ));
+    }
+
+    let link_id = Uuid::new_v4().to_string();
+    state.db.save_link(&PlatformLinkInput {
+        id: Some(link_id.clone()),
+        steam_account_id: steam_account_id.clone(),
+        platform_code: "perfectworld".to_string(),
+        external_id: Some(steam_id64),
+        display_name: persona_name,
+        profile_url: None,
+        remark: None,
+        status: "unverified".to_string(),
+    })?;
+    let database = Arc::clone(&state.db);
+    let result = query_player_data(state, link_id.clone(), force_refresh).await;
+    if result.is_err() {
+        let _ = database.delete_link(&link_id);
+    }
+    result
+}
+
+#[tauri::command]
 fn save_platform_credential(
     state: State<AppState>,
     platform_code: String,
     token: Option<String>,
 ) -> AppResult<()> {
     player_query::save_credential(&platform_code, token.as_deref())?;
-    if platform_code == "5e" {
-        state.db.set_setting("credential.5e.expired", "false")?;
+    if matches!(platform_code.as_str(), "5e" | "perfectworld") {
+        state
+            .db
+            .set_setting(&format!("credential.{platform_code}.expired"), "false")?;
     }
     Ok(())
 }
@@ -358,7 +438,7 @@ fn get_platform_credential_status(
     state: State<AppState>,
     platform_code: String,
 ) -> AppResult<PlatformCredentialStatus> {
-    if platform_code != "5e" {
+    if !matches!(platform_code.as_str(), "5e" | "perfectworld") {
         return Err(AppError::new(
             "PLAYER_PLATFORM_UNSUPPORTED",
             "该平台暂不支持玩家数据凭据",
@@ -366,9 +446,9 @@ fn get_platform_credential_status(
     }
     let expired = state
         .db
-        .setting("credential.5e.expired")?
+        .setting(&format!("credential.{platform_code}.expired"))?
         .is_some_and(|value| value == "true");
-    player_query::credential_status(expired)
+    player_query::credential_status(&platform_code, expired)
 }
 #[tauri::command]
 fn current_status(state: State<AppState>) -> CurrentStatus {
@@ -1148,6 +1228,7 @@ pub fn run() {
             save_platform_link,
             delete_platform_link,
             query_player_data,
+            auto_link_perfectworld,
             save_platform_credential,
             get_platform_credential_status,
             current_status,
