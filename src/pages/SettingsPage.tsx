@@ -11,9 +11,11 @@ import {
   ExternalLink,
   FolderOpen,
   GitBranch,
+  KeyRound,
   RefreshCw,
   Save,
   ShieldCheck,
+  Trash2,
 } from "lucide-react";
 import { api } from "../lib/api";
 import {
@@ -22,7 +24,12 @@ import {
   GITHUB_RELEASES_URL,
   GITHUB_REPOSITORY_URL,
 } from "../lib/appMeta";
-import type { AppError, UpdateInfo, UpdateProgress } from "../lib/types";
+import type {
+  AppError,
+  PlatformCredentialStatus,
+  UpdateInfo,
+  UpdateProgress,
+} from "../lib/types";
 
 const errorMessage = (error: unknown) =>
   (error as AppError)?.message || "操作失败";
@@ -48,6 +55,9 @@ export function SettingsPage({
   const [timeout, setTimeoutValue] = useState(15);
   const [saving, setSaving] = useState(false);
   const [version, setVersion] = useState("未知");
+  const [fiveEToken, setFiveEToken] = useState("");
+  const [fiveEStatus, setFiveEStatus] = useState<PlatformCredentialStatus>();
+  const [savingFiveE, setSavingFiveE] = useState(false);
 
   useEffect(() => {
     void api
@@ -58,6 +68,7 @@ export function SettingsPage({
       })
       .catch(() => {});
     void getVersion().then(setVersion).catch(() => setVersion("未知"));
+    void api.platformCredentialStatus("5e").then(setFiveEStatus).catch(() => {});
   }, []);
 
   const choose = async () => {
@@ -105,6 +116,19 @@ export function SettingsPage({
       notify("success", "最近备份已恢复");
     } catch (error) {
       notify("error", errorMessage(error));
+    }
+  };
+  const saveFiveEToken = async (remove = false) => {
+    setSavingFiveE(true);
+    try {
+      await api.savePlatformCredential("5e", remove ? undefined : fiveEToken);
+      setFiveEToken("");
+      setFiveEStatus(await api.platformCredentialStatus("5e"));
+      notify("success", remove ? "5E Token 已删除" : "5E Token 已安全保存");
+    } catch (error) {
+      notify("error", errorMessage(error));
+    } finally {
+      setSavingFiveE(false);
     }
   };
   const exportJson = async () => {
@@ -207,6 +231,55 @@ export function SettingsPage({
           {saving ? "正在保存" : "保存 Steam 设置"}
         </button>
       </section>
+      <section className="fivee-credential" aria-labelledby="fivee-credential-title">
+        <div className="section-heading">
+          <h2 id="fivee-credential-title">
+            <KeyRound />
+            5E 查询凭据
+          </h2>
+          <p>
+            不填写也会尽量匿名查询。Token 仅保存在 Windows 凭据管理器，不进入数据库、日志或导出文件。
+          </p>
+        </div>
+        <div className="credential-status" role="status">
+          <span className={fiveEStatus?.configured ? "configured" : ""} />
+          {fiveEStatus?.configured
+            ? fiveEStatus.expired
+              ? "已配置，但可能已经过期"
+              : "已安全配置"
+            : "未配置，使用匿名查询"}
+        </div>
+        <label>
+          Bearer Token
+          <input
+            type="password"
+            autoComplete="off"
+            value={fiveEToken}
+            placeholder={fiveEStatus?.configured ? "输入新 Token 可替换现有凭据" : "可选"}
+            onChange={(event) => setFiveEToken(event.target.value)}
+          />
+        </label>
+        <div className="credential-actions">
+          <button
+            className="button primary"
+            disabled={savingFiveE || !fiveEToken.trim()}
+            onClick={() => void saveFiveEToken()}
+          >
+            <Save />
+            {savingFiveE ? "正在保存" : "保存 Token"}
+          </button>
+          {fiveEStatus?.configured && (
+            <button
+              className="button danger"
+              disabled={savingFiveE}
+              onClick={() => void saveFiveEToken(true)}
+            >
+              <Trash2 />
+              删除 Token
+            </button>
+          )}
+        </div>
+      </section>
       <section className="about-safety" aria-labelledby="about-title">
         <div className="about-header">
           <img src={APP_ICON_PATH} alt={`${APP_NAME} 图标`} />
@@ -299,8 +372,8 @@ export function SettingsPage({
           </p>
           <ul>
             <li>
-              不保存或传递密码、Cookie、Token、Steam Guard
-              密钥及其他认证数据。
+              不保存 Steam 密码、Cookie 或 Steam Guard
+              密钥；可选的 5E Token 仅保存在 Windows 凭据管理器。
             </li>
             <li>
               不注入 Steam 或游戏进程，不读写进程内存，不绕过验证，也不操作反作弊系统。

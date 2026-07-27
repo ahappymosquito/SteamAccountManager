@@ -267,6 +267,57 @@ impl Database {
         Ok(())
     }
 
+    pub fn platform_link(&self, id: &str) -> AppResult<Option<PlatformLink>> {
+        let conn = self.0.lock();
+        Ok(conn
+            .query_row(
+                "SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.remark,p.status,p.last_verified_at FROM account_platform_links l JOIN platform_accounts p ON p.id=l.platform_account_id WHERE l.id=?1",
+                [id],
+                |r| {
+                    Ok(PlatformLink {
+                        id: r.get(0)?,
+                        steam_account_id: r.get(1)?,
+                        platform_code: r.get(2)?,
+                        external_id: r.get(3)?,
+                        display_name: r.get(4)?,
+                        profile_url: r.get(5)?,
+                        remark: r.get(6)?,
+                        status: r.get(7)?,
+                        last_verified_at: r.get(8)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn player_snapshot_cache(
+        &self,
+        platform_link_id: &str,
+    ) -> AppResult<Option<(String, String)>> {
+        let conn = self.0.lock();
+        Ok(conn
+            .query_row(
+                "SELECT snapshot_json,expires_at FROM player_snapshot_cache WHERE platform_link_id=?1",
+                [platform_link_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn save_player_snapshot_cache(
+        &self,
+        platform_link_id: &str,
+        snapshot_json: &str,
+        fetched_at: &str,
+        expires_at: &str,
+    ) -> AppResult<()> {
+        self.0.lock().execute(
+            "INSERT INTO player_snapshot_cache(platform_link_id,snapshot_json,fetched_at,expires_at) VALUES(?1,?2,?3,?4) ON CONFLICT(platform_link_id) DO UPDATE SET snapshot_json=excluded.snapshot_json,fetched_at=excluded.fetched_at,expires_at=excluded.expires_at",
+            params![platform_link_id, snapshot_json, fetched_at, expires_at],
+        )?;
+        Ok(())
+    }
+
     pub fn list_platform_apps(&self) -> AppResult<Vec<PlatformApp>> {
         let conn = self.0.lock();
         let mut stmt = conn.prepare(
@@ -745,6 +796,43 @@ mod tests {
             db.list_accounts().expect("accounts")[0].platform_codes,
             vec!["5e", "faceit"]
         );
+    }
+
+    #[test]
+    fn player_snapshot_cache_persists_only_normalized_snapshot_and_expiry() {
+        let temp = tempfile::tempdir().expect("temp");
+        let db = Database::open(&temp.path().join("player-cache.db")).expect("db");
+        db.sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
+        let account = db.list_accounts().expect("accounts").remove(0);
+        db.save_link(&PlatformLinkInput {
+            id: Some("link-5e".into()),
+            steam_account_id: account.id,
+            platform_code: "5e".into(),
+            external_id: Some("123456".into()),
+            display_name: None,
+            profile_url: None,
+            remark: None,
+            status: "user_confirmed".into(),
+        })
+        .expect("platform link");
+        let normalized = r#"{"platform":"5e","externalId":"123456","warnings":[]}"#;
+
+        db.save_player_snapshot_cache(
+            "link-5e",
+            normalized,
+            "2026-07-27T08:00:00Z",
+            "2026-07-27T08:15:00Z",
+        )
+        .expect("save snapshot");
+
+        let cached = db
+            .player_snapshot_cache("link-5e")
+            .expect("read snapshot")
+            .expect("snapshot exists");
+        assert_eq!(cached.0, normalized);
+        assert_eq!(cached.1, "2026-07-27T08:15:00Z");
+        assert!(!cached.0.contains("token"));
     }
 
     #[test]

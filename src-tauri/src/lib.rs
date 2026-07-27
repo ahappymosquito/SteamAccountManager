@@ -4,6 +4,7 @@ mod cs2;
 mod database;
 mod error;
 mod models;
+mod player_query;
 mod software;
 mod steam;
 
@@ -30,7 +31,7 @@ use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
 
 pub struct AppState {
-    db: Database,
+    db: Arc<Database>,
     data_dir: PathBuf,
     switch_lock: AtomicBool,
     launch_lock: Mutex<()>,
@@ -245,6 +246,119 @@ fn save_platform_link(state: State<AppState>, input: PlatformLinkInput) -> AppRe
 #[tauri::command]
 fn delete_platform_link(state: State<AppState>, id: String) -> AppResult<()> {
     state.db.delete_link(&id)
+}
+
+#[tauri::command]
+async fn query_player_data(
+    state: State<'_, AppState>,
+    platform_link_id: String,
+    force_refresh: bool,
+) -> AppResult<PlayerSnapshot> {
+    let link = state
+        .db
+        .platform_link(&platform_link_id)?
+        .ok_or_else(|| AppError::new("PLATFORM_LINK_NOT_FOUND", "平台关联不存在"))?;
+    if link.platform_code != "5e" {
+        return Err(AppError::new(
+            "PLAYER_PLATFORM_UNSUPPORTED",
+            "该平台暂不支持玩家数据查询",
+        ));
+    }
+    let external_id = link
+        .external_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::new("PLAYER_ID_MISSING", "请先填写 5E 玩家 ID"))?
+        .to_string();
+    let cached =
+        state
+            .db
+            .player_snapshot_cache(&platform_link_id)?
+            .and_then(|(payload, expires_at)| {
+                serde_json::from_str::<PlayerSnapshot>(&payload)
+                    .ok()
+                    .map(|snapshot| (snapshot, expires_at))
+            });
+    if !force_refresh {
+        if let Some((snapshot, expires_at)) = &cached {
+            if chrono::DateTime::parse_from_rfc3339(expires_at)
+                .is_ok_and(|expires| expires > Utc::now())
+            {
+                return Ok(snapshot.clone());
+            }
+        }
+    }
+
+    let token = player_query::load_credential("5e")?;
+    let query_external_id = external_id.clone();
+    let query_token = token.clone();
+    let fetched = tauri::async_runtime::spawn_blocking(move || {
+        player_query::PlayerQuery::new()?.query_five_e(&query_external_id, query_token.as_deref())
+    })
+    .await
+    .map_err(|_| AppError::new("PLAYER_QUERY_FAILED", "玩家数据后台查询失败"))?;
+
+    match fetched {
+        Ok((snapshot, token_expired)) => {
+            state.db.set_setting(
+                "credential.5e.expired",
+                if token_expired { "true" } else { "false" },
+            )?;
+            let expires_at = (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
+            let payload = serde_json::to_string(&snapshot)
+                .map_err(|_| AppError::new("PLAYER_CACHE_FAILED", "无法保存玩家数据缓存"))?;
+            state.db.save_player_snapshot_cache(
+                &platform_link_id,
+                &payload,
+                &snapshot.fetched_at,
+                &expires_at,
+            )?;
+            Ok(snapshot)
+        }
+        Err(error) => {
+            if let Some((mut snapshot, _)) = cached {
+                snapshot.stale = true;
+                snapshot
+                    .warnings
+                    .push(format!("刷新失败，正在显示缓存数据：{}", error.message));
+                Ok(snapshot)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn save_platform_credential(
+    state: State<AppState>,
+    platform_code: String,
+    token: Option<String>,
+) -> AppResult<()> {
+    player_query::save_credential(&platform_code, token.as_deref())?;
+    if platform_code == "5e" {
+        state.db.set_setting("credential.5e.expired", "false")?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_platform_credential_status(
+    state: State<AppState>,
+    platform_code: String,
+) -> AppResult<PlatformCredentialStatus> {
+    if platform_code != "5e" {
+        return Err(AppError::new(
+            "PLAYER_PLATFORM_UNSUPPORTED",
+            "该平台暂不支持玩家数据凭据",
+        ));
+    }
+    let expired = state
+        .db
+        .setting("credential.5e.expired")?
+        .is_some_and(|value| value == "true");
+    player_query::credential_status(expired)
 }
 #[tauri::command]
 fn current_status(state: State<AppState>) -> CurrentStatus {
@@ -999,7 +1113,7 @@ pub fn run() {
             let db = Database::open(&data_dir.join("steam-account-manager.db"))
                 .map_err(|e| e.message)?;
             app.manage(AppState {
-                db,
+                db: Arc::new(db),
                 data_dir,
                 switch_lock: AtomicBool::new(false),
                 launch_lock: Mutex::new(()),
@@ -1023,6 +1137,9 @@ pub fn run() {
             list_platform_links,
             save_platform_link,
             delete_platform_link,
+            query_player_data,
+            save_platform_credential,
+            get_platform_credential_status,
             current_status,
             switch_account,
             get_settings,

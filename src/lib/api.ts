@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, Cs2Config, Cs2RuntimeFile, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformLink, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption, UpdateInfo, UpdateProgress } from "./types";
+import type { Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, Cs2Config, Cs2RuntimeFile, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption, UpdateInfo, UpdateProgress } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -18,6 +18,9 @@ export const api = {
   links: (steamAccountId:string) => invoke<PlatformLink[]>("list_platform_links", { steamAccountId }),
   saveLink: (input:Omit<PlatformLink,"lastVerifiedAt">) => invoke<void>("save_platform_link", { input }),
   deleteLink: (id:string) => invoke<void>("delete_platform_link", { id }),
+  playerData: (platformLinkId:string,forceRefresh=false) => invoke<PlayerSnapshot>("query_player_data", { platformLinkId,forceRefresh }),
+  savePlatformCredential: (platformCode:string,token?:string) => invoke<void>("save_platform_credential", { platformCode,token:token||null }),
+  platformCredentialStatus: (platformCode:string) => invoke<PlatformCredentialStatus>("get_platform_credential_status", { platformCode }),
   settings: () => invoke<Record<string,unknown>>("get_settings"),
   setSetting: (key:string,value:unknown) => invoke<void>("set_setting", { key,value }),
   logs: () => invoke<SwitchLog[]>("list_switch_logs"),
