@@ -13,6 +13,7 @@ const FIVE_E_ID_TRANSFER: &str =
     "https://gate.5eplay.com/userinterface/http/v1/userinterface/idTransfer";
 const FIVE_E_PROFILE: &str = "https://gate.5eplay.com/userinterface/http/v1/userinterface/header";
 const FIVE_E_DATA: &str = "https://gate.5eplay.com/crane/http/api/data";
+const FIVE_E_SEARCH: &str = "https://arena.5eplay.com/api/search/player/1/16";
 const CREDENTIAL_SERVICE: &str = "Steam Account Manager";
 const CREDENTIAL_USER: &str = "5e-bearer-token";
 const MATCH_LIMIT: usize = 20;
@@ -23,19 +24,31 @@ struct JsonResponse {
     token_expired: bool,
 }
 
+#[derive(Debug, PartialEq)]
+struct ResolvedFiveEPlayer {
+    domain: String,
+    uuid: String,
+}
+
 #[derive(Clone)]
 pub struct PlayerQuery {
     client: Client,
+    id_transfer_url: String,
+    search_url: String,
 }
 
 impl PlayerQuery {
     pub fn new() -> AppResult<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(15))
-            .user_agent("SteamAccountManager/0.6.1")
+            .user_agent("SteamAccountManager/0.6.2")
             .build()
             .map_err(|_| AppError::new("PLAYER_HTTP_INIT_FAILED", "无法初始化玩家数据网络连接"))?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            id_transfer_url: FIVE_E_ID_TRANSFER.to_string(),
+            search_url: FIVE_E_SEARCH.to_string(),
+        })
     }
 
     pub fn query_five_e(
@@ -43,15 +56,18 @@ impl PlayerQuery {
         external_id: &str,
         token: Option<&str>,
     ) -> AppResult<(PlayerSnapshot, bool)> {
-        let external_id = external_id.trim();
-        if external_id.is_empty() || external_id.len() > 128 {
+        let locator = external_id.trim();
+        if locator.is_empty() || locator.len() > 256 {
             return Err(AppError::new(
                 "PLAYER_ID_INVALID",
-                "5E 玩家 ID 为空或长度无效",
+                "5E 玩家名称、主页链接或 ID 为空或长度无效",
             ));
         }
 
-        let (uuid, mut token_expired) = self.resolve_five_e_id(external_id, token)?;
+        let resolved = self.resolve_five_e_player(locator)?;
+        let uuid = resolved.uuid;
+        let domain = resolved.domain;
+        let mut token_expired = false;
         let profile = self.get_json(
             Url::parse_with_params(FIVE_E_PROFILE, [("v", uuid.as_str())])
                 .map_err(|_| AppError::new("PLAYER_URL_INVALID", "5E 玩家资料地址无效"))?,
@@ -86,7 +102,7 @@ impl PlayerQuery {
                 let handles = chunk
                     .iter()
                     .map(|summary| {
-                        scope.spawn(|| self.fetch_five_e_match(summary, &uuid, external_id, token))
+                        scope.spawn(|| self.fetch_five_e_match(summary, &uuid, &domain, token))
                     })
                     .collect::<Vec<_>>();
                 handles
@@ -159,7 +175,7 @@ impl PlayerQuery {
         Ok((
             PlayerSnapshot {
                 platform: "5e".to_string(),
-                external_id: external_id.to_string(),
+                external_id: domain,
                 nickname,
                 avatar_url,
                 rank_name,
@@ -176,25 +192,72 @@ impl PlayerQuery {
         ))
     }
 
-    fn resolve_five_e_id(
-        &self,
-        external_id: &str,
-        token: Option<&str>,
-    ) -> AppResult<(String, bool)> {
-        let response = self.post_json(
-            Url::parse(FIVE_E_ID_TRANSFER)
-                .map_err(|_| AppError::new("PLAYER_URL_INVALID", "5E ID 转换地址无效"))?,
-            json!({"trans": {"domain": external_id}}),
-            token,
-        )?;
+    fn resolve_five_e_player(&self, locator: &str) -> AppResult<ResolvedFiveEPlayer> {
+        if let Some(domain) = domain_from_player_url(locator)? {
+            return self.transfer_five_e_domain(&domain);
+        }
+        if locator.chars().all(|character| character.is_ascii_digit()) {
+            return self.transfer_five_e_domain(locator);
+        }
+
+        let search_url = Url::parse_with_params(&self.search_url, [("keywords", locator)])
+            .map_err(|_| AppError::new("PLAYER_URL_INVALID", "5E 玩家搜索地址无效"))?;
+        let mut search_error = None;
+        match self.get_json(search_url, None) {
+            Ok(response) => {
+                if let Some((domain, _username)) = select_search_player(&response.value, locator) {
+                    return self.transfer_five_e_domain(&domain);
+                }
+            }
+            Err(error) => search_error = Some(error),
+        }
+
+        match self.transfer_five_e_domain(locator) {
+            Ok(resolved) => Ok(resolved),
+            Err(error) if error.code != "PLAYER_NOT_FOUND" => Err(error),
+            Err(_) => Err(search_error.unwrap_or_else(|| {
+                AppError::new(
+                    "PLAYER_NOT_FOUND",
+                    "未找到名称完全匹配的 5E 玩家，请检查玩家名称、主页链接或 ID",
+                )
+            })),
+        }
+    }
+
+    fn transfer_five_e_domain(&self, domain: &str) -> AppResult<ResolvedFiveEPlayer> {
+        let response = self
+            .post_json(
+                Url::parse(&self.id_transfer_url)
+                    .map_err(|_| AppError::new("PLAYER_URL_INVALID", "5E ID 转换地址无效"))?,
+                json!({"trans": {"domain": domain}}),
+                None,
+            )
+            .map_err(|error| {
+                if error.code == "PLAYER_REMOTE_REJECTED" && error.message.contains("400") {
+                    AppError::new(
+                        "PLAYER_NOT_FOUND",
+                        "未找到该 5E 玩家，请检查玩家名称、主页链接或 ID",
+                    )
+                } else {
+                    error
+                }
+            })?;
         let uuid = response
             .value
             .get("data")
             .and_then(|data| recursive_text(data, &["uuid"]))
             .or_else(|| recursive_text(&response.value, &["uuid"]))
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| AppError::new("PLAYER_NOT_FOUND", "未找到该 5E 玩家，请检查主页 ID"))?;
-        Ok((uuid, response.token_expired))
+            .ok_or_else(|| {
+                AppError::new(
+                    "PLAYER_NOT_FOUND",
+                    "未找到该 5E 玩家，请检查玩家名称、主页链接或 ID",
+                )
+            })?;
+        Ok(ResolvedFiveEPlayer {
+            domain: domain.to_string(),
+            uuid,
+        })
     }
 
     fn fetch_five_e_match(
@@ -523,6 +586,56 @@ fn player_number(player: &Value, keys: &[&str]) -> Option<f64> {
     None
 }
 
+fn domain_from_player_url(locator: &str) -> AppResult<Option<String>> {
+    if !locator.starts_with("https://") && !locator.starts_with("http://") {
+        return Ok(None);
+    }
+    let url = Url::parse(locator)
+        .map_err(|_| AppError::new("PLAYER_ID_INVALID", "5E 玩家主页链接无效"))?;
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    if host != "5eplay.com" && !host.ends_with(".5eplay.com") {
+        return Err(AppError::new(
+            "PLAYER_ID_INVALID",
+            "请填写 5E 官方玩家主页链接",
+        ));
+    }
+    let segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    let domain = segments
+        .windows(2)
+        .find(|pair| pair[0].eq_ignore_ascii_case("player"))
+        .map(|pair| pair[1].trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::new("PLAYER_ID_INVALID", "5E 玩家主页链接中缺少玩家 ID"))?;
+    Ok(Some(domain.to_string()))
+}
+
+fn select_search_player(value: &Value, keyword: &str) -> Option<(String, String)> {
+    let users = value.pointer("/data/user/list").and_then(Value::as_array)?;
+    let candidates = users
+        .iter()
+        .filter_map(|user| {
+            let username = value_text(user.get("username"))?;
+            let domain = value_text(user.get("domain"))?;
+            Some((domain, username))
+        })
+        .collect::<Vec<_>>();
+    if let Some(candidate) = candidates.iter().find(|(_, username)| username == keyword) {
+        return Some(candidate.clone());
+    }
+    let insensitive = candidates
+        .into_iter()
+        .filter(|(_, username)| username.eq_ignore_ascii_case(keyword))
+        .collect::<Vec<_>>();
+    if insensitive.len() == 1 {
+        insensitive.into_iter().next()
+    } else {
+        None
+    }
+}
+
 fn value_number(value: Option<&Value>) -> Option<f64> {
     match value? {
         Value::Number(value) => value.as_f64(),
@@ -658,7 +771,10 @@ fn weighted_average(
 
 #[cfg(test)]
 mod tests {
-    use super::{aggregate, find_player, match_list, value_bool, PlayerQuery};
+    use super::{
+        aggregate, domain_from_player_url, find_player, match_list, select_search_player,
+        value_bool, PlayerQuery,
+    };
     use crate::models::PlayerMatch;
     use reqwest::{blocking::Client, Url};
     use serde_json::json;
@@ -688,6 +804,8 @@ mod tests {
     fn test_query() -> PlayerQuery {
         PlayerQuery {
             client: Client::builder().no_proxy().build().expect("query client"),
+            id_transfer_url: super::FIVE_E_ID_TRANSFER.to_string(),
+            search_url: super::FIVE_E_SEARCH.to_string(),
         }
     }
 
@@ -764,6 +882,108 @@ mod tests {
         assert_eq!(match_list(&payload)[0]["match_id"], 42);
         assert_eq!(value_bool(Some(&json!("1"))), Some(true));
         assert_eq!(value_bool(Some(&json!(0))), Some(false));
+    }
+
+    #[test]
+    fn extracts_domain_from_official_player_url() {
+        assert_eq!(
+            domain_from_player_url("https://arena.5eplay.com/data/player/1111?from=search")
+                .expect("valid URL")
+                .as_deref(),
+            Some("1111")
+        );
+        assert_eq!(domain_from_player_url("1111").expect("raw ID"), None);
+        assert_eq!(
+            domain_from_player_url("https://example.com/data/player/1111")
+                .expect_err("foreign URL")
+                .code,
+            "PLAYER_ID_INVALID"
+        );
+    }
+
+    #[test]
+    fn selects_only_exact_or_unique_case_insensitive_player_name() {
+        let payload = json!({
+            "data": {"user": {"list": [
+                {"username": "UniquePlayer", "domain": "1001"},
+                {"username": "OtherPlayer", "domain": "1002"}
+            ]}}
+        });
+        assert_eq!(
+            select_search_player(&payload, "UniquePlayer"),
+            Some(("1001".into(), "UniquePlayer".into()))
+        );
+        assert_eq!(
+            select_search_player(&payload, "uniqueplayer"),
+            Some(("1001".into(), "UniquePlayer".into()))
+        );
+        assert_eq!(select_search_player(&payload, "Unique"), None);
+    }
+
+    #[test]
+    fn rejects_ambiguous_case_insensitive_name_matches() {
+        let payload = json!({
+            "data": {"user": {"list": [
+                {"username": "Player", "domain": "1001"},
+                {"username": "PLAYER", "domain": "1002"}
+            ]}}
+        });
+        assert_eq!(select_search_player(&payload, "player"), None);
+    }
+
+    #[test]
+    fn resolves_an_exact_player_name_through_search_and_id_transfer() {
+        let (url, requests) = serve(vec![
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 66\r\nConnection: close\r\n\r\n{\"data\":{\"user\":{\"list\":[{\"username\":\"Target\",\"domain\":\"4321\"}]}}}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 29\r\nConnection: close\r\n\r\n{\"data\":{\"uuid\":\"uuid-4321\"}}",
+        ]);
+        let mut query = test_query();
+        query.search_url = url.to_string();
+        query.id_transfer_url = url.to_string();
+
+        let resolved = query
+            .resolve_five_e_player("Target")
+            .expect("resolve exact player");
+
+        assert_eq!(resolved.domain, "4321");
+        assert_eq!(resolved.uuid, "uuid-4321");
+        assert!(requests
+            .recv()
+            .expect("search request")
+            .contains("keywords=Target"));
+        assert!(requests
+            .recv()
+            .expect("ID transfer request")
+            .contains("\"domain\":\"4321\""));
+    }
+
+    #[test]
+    fn resolves_numeric_id_and_official_url_without_player_search() {
+        let (url, requests) = serve(vec![
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 29\r\nConnection: close\r\n\r\n{\"data\":{\"uuid\":\"uuid-1111\"}}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 29\r\nConnection: close\r\n\r\n{\"data\":{\"uuid\":\"uuid-2222\"}}",
+        ]);
+        let mut query = test_query();
+        query.id_transfer_url = url.to_string();
+        query.search_url = "http://127.0.0.1:1/search".to_string();
+
+        let numeric = query.resolve_five_e_player("1111").expect("numeric ID");
+        let linked = query
+            .resolve_five_e_player("https://arena.5eplay.com/data/player/2222")
+            .expect("official URL");
+
+        assert_eq!(numeric.domain, "1111");
+        assert_eq!(numeric.uuid, "uuid-1111");
+        assert_eq!(linked.domain, "2222");
+        assert_eq!(linked.uuid, "uuid-2222");
+        assert!(requests
+            .recv()
+            .expect("numeric transfer")
+            .contains("\"domain\":\"1111\""));
+        assert!(requests
+            .recv()
+            .expect("URL transfer")
+            .contains("\"domain\":\"2222\""));
     }
 
     #[test]

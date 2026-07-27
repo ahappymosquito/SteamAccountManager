@@ -236,6 +236,13 @@ impl Database {
             .id
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let previous_identity: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT p.platform_code,p.external_id FROM account_platform_links l JOIN platform_accounts p ON p.id=l.platform_account_id WHERE l.id=?1",
+                [&link_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
         let platform_id: Option<String> = tx
             .query_row(
                 "SELECT platform_account_id FROM account_platform_links WHERE id=?1",
@@ -246,6 +253,22 @@ impl Database {
         let platform_id = platform_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         tx.execute("INSERT INTO platform_accounts(id,platform_code,external_id,display_name,profile_url,remark,status,binding_method,last_verified_at,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'manual',CASE WHEN ?7='user_confirmed' THEN ?8 ELSE NULL END,?8,?8) ON CONFLICT(id) DO UPDATE SET platform_code=excluded.platform_code,external_id=excluded.external_id,display_name=excluded.display_name,profile_url=excluded.profile_url,remark=excluded.remark,status=excluded.status,last_verified_at=CASE WHEN excluded.status='user_confirmed' THEN excluded.updated_at ELSE platform_accounts.last_verified_at END,updated_at=excluded.updated_at",params![platform_id,input.platform_code,input.external_id,input.display_name,input.profile_url,input.remark,input.status,now])?;
         tx.execute("INSERT INTO account_platform_links(id,steam_account_id,platform_account_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?4) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at",params![link_id,input.steam_account_id,platform_id,now])?;
+        let normalize = |value: Option<&str>| {
+            value
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        let identity_changed = previous_identity.is_some_and(|(platform_code, external_id)| {
+            platform_code != input.platform_code
+                || normalize(external_id.as_deref()) != normalize(input.external_id.as_deref())
+        });
+        if identity_changed {
+            tx.execute(
+                "DELETE FROM player_snapshot_cache WHERE platform_link_id=?1",
+                [&link_id],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -807,7 +830,7 @@ mod tests {
         let account = db.list_accounts().expect("accounts").remove(0);
         db.save_link(&PlatformLinkInput {
             id: Some("link-5e".into()),
-            steam_account_id: account.id,
+            steam_account_id: account.id.clone(),
             platform_code: "5e".into(),
             external_id: Some("123456".into()),
             display_name: None,
@@ -833,6 +856,22 @@ mod tests {
         assert_eq!(cached.0, normalized);
         assert_eq!(cached.1, "2026-07-27T08:15:00Z");
         assert!(!cached.0.contains("token"));
+
+        db.save_link(&PlatformLinkInput {
+            id: Some("link-5e".into()),
+            steam_account_id: account.id,
+            platform_code: "5e".into(),
+            external_id: Some("654321".into()),
+            display_name: Some("新玩家".into()),
+            profile_url: None,
+            remark: None,
+            status: "unverified".into(),
+        })
+        .expect("change linked player");
+        assert!(db
+            .player_snapshot_cache("link-5e")
+            .expect("read cleared snapshot")
+            .is_none());
     }
 
     #[test]
