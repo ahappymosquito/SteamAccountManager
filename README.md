@@ -1,5 +1,11 @@
 # Steam Account Manager
 
+## 0.6.1 5E 玩家数据查询
+
+- 账号详情可验证 5E 主页 ID，并查询身份、段位、最近比赛后 ELO、KD、Rating、ADR、爆头率、胜率及最近 20 场比赛。
+- 后端通过统一玩家查询接口适配 5E 网页数据服务；单场详情失败会保留其余结果，成功快照缓存 15 分钟，离线时可回退到过期缓存。
+- 可选 Bearer Token 只存入 Windows 凭据管理器，不进入 SQLite、日志或导入导出；Token 失效时自动降级为匿名查询。
+
 ## 0.6.0 统一应用图标
 
 - 桌面、开始菜单、任务栏、标题栏、侧栏、关于页和 favicon 统一使用同一套透明圆角图标。
@@ -101,6 +107,7 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 - 独立管理完美世界、5E 与 TeamSpeak 3 的安装检测和官方下载
 - 管理多个 CS2 CFG 方案，并按 Steam 账号在切换前复制、校验和更新 `+exec` 启动参数
 - 手工关联完美世界、5E、FACEIT 或其他平台账号
+- 在账号详情验证 5E 主页 ID，并查看近期段位、比赛与聚合战绩
 - 在明确确认后关闭 Steam、备份配置、切换账号并重新启动
 - 判断本地确认、当前推测、Steam 未运行和未知状态
 - 配置并直接启动第三方平台程序，不经过 shell
@@ -109,7 +116,9 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 
 ## 安全与隐私
 
-本工具只处理 Steam 官方客户端已记住且本机仍有效的登录状态，不参与账号认证。它不会保存 Steam 密码、Steam Guard 密钥、`shared_secret`、`identity_secret`、Cookie、Session Token 或浏览器数据，不会模拟登录、绕过 Steam Guard、读取或修改进程内存、向 Steam 或游戏注入代码、干预反作弊系统，也不会调用第三方私有 API。状态失效时，用户必须在 Steam 官方客户端完成登录或 Steam Guard 验证。
+本工具只处理 Steam 官方客户端已记住且本机仍有效的登录状态，不参与 Steam 账号认证。它不会保存 Steam 密码、Steam Guard 密钥、`shared_secret`、`identity_secret`、Cookie、Steam Session Token 或浏览器数据，不会模拟登录、绕过 Steam Guard、读取或修改进程内存、向 Steam 或游戏注入代码或干预反作弊系统。状态失效时，用户必须在 Steam 官方客户端完成登录或 Steam Guard 验证。
+
+5E 玩家查询使用其非公开网页数据接口，可能随平台调整而失效。ELO 来自最近一场已完成比赛的 `origin_elo + change_elo`，界面明确标注为“最近比赛后 ELO”，不代表官方实时值。可选的 5E Bearer Token 仅保存在 Windows 凭据管理器，不写入 SQLite、日志、缓存、导入导出或错误文本；匿名查询仍可工作，401/403 时会保留凭据并自动降级。应用只缓存规范化结果，不保存平台原始 JSON。
 
 日志不会记录完整注册表、完整 VDF 内容或认证数据。Steam 登录名在日志中默认脱敏。导入器递归拒绝包含 password、cookie、token、secret、Steam Guard 等危险键名的数据。
 

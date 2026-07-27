@@ -20,3 +20,4 @@ CREATE INDEX IF NOT EXISTS idx_profiles_group ON account_profiles(group_name);
 CREATE INDEX IF NOT EXISTS idx_profiles_favorite ON account_profiles(favorite);
 CREATE INDEX IF NOT EXISTS idx_platform_code_external ON platform_accounts(platform_code, external_id);
 CREATE INDEX IF NOT EXISTS idx_cfg_versions_profile ON cfg_profile_versions(profile_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS player_snapshot_cache (platform_link_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL, fetched_at TEXT NOT NULL, expires_at TEXT NOT NULL, FOREIGN KEY (platform_link_id) REFERENCES account_platform_links(id) ON DELETE CASCADE);

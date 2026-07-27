@@ -93,6 +93,65 @@ pub struct PlatformLinkInput {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerStats {
+    pub sample_size: usize,
+    pub kills: i64,
+    pub deaths: i64,
+    pub kd: Option<f64>,
+    pub rating: Option<f64>,
+    pub adr: Option<f64>,
+    pub headshot_rate: Option<f64>,
+    pub win_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerMatch {
+    pub match_id: String,
+    pub map: Option<String>,
+    pub occurred_at: Option<String>,
+    pub result: Option<String>,
+    pub score: Option<String>,
+    pub kills: Option<i64>,
+    pub deaths: Option<i64>,
+    pub assists: Option<i64>,
+    pub rating: Option<f64>,
+    pub adr: Option<f64>,
+    pub headshot_rate: Option<f64>,
+    pub elo_before: Option<f64>,
+    pub elo_change: Option<f64>,
+    pub elo_after: Option<f64>,
+    pub rounds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerSnapshot {
+    pub platform: String,
+    pub external_id: String,
+    pub nickname: Option<String>,
+    pub avatar_url: Option<String>,
+    pub rank_name: Option<String>,
+    pub elo: Option<f64>,
+    pub elo_source: Option<String>,
+    pub stats: PlayerStats,
+    pub recent_matches: Vec<PlayerMatch>,
+    pub capabilities: Vec<String>,
+    pub warnings: Vec<String>,
+    pub fetched_at: String,
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformCredentialStatus {
+    pub platform_code: String,
+    pub configured: bool,
+    pub expired: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrentStatus {
