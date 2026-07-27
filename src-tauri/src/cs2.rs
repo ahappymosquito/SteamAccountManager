@@ -63,6 +63,37 @@ pub fn write_managed_profile(data_dir: &Path, profile: &CfgProfile) -> AppResult
     }
 }
 
+pub fn export_profile(requested: &Path, content: &str) -> AppResult<PathBuf> {
+    let mut path = requested.to_path_buf();
+    match path.extension().and_then(|value| value.to_str()) {
+        None => {
+            path.set_extension("cfg");
+        }
+        Some(extension) if extension.eq_ignore_ascii_case("cfg") => {}
+        Some(_) => {
+            return Err(AppError::new(
+                "CFG_EXPORT_EXTENSION",
+                "导出文件必须使用 .cfg 扩展名",
+            ));
+        }
+    }
+    let parent = path
+        .parent()
+        .filter(|value| value.is_dir())
+        .ok_or_else(|| AppError::new("CFG_EXPORT_PARENT_INVALID", "导出目录不存在或不可用"))?;
+    if !parent.is_dir() || path.is_dir() {
+        return Err(AppError::new(
+            "CFG_EXPORT_PARENT_INVALID",
+            "导出目录不存在或不可用",
+        ));
+    }
+    steam::atomic_write_text(&path, content).map_err(|error| {
+        AppError::new("CFG_EXPORT_FAILED", "CFG 导出失败")
+            .detail(error.details.unwrap_or(error.code))
+    })?;
+    Ok(path)
+}
+
 fn quoted_value(input: &str, key: &str) -> Option<String> {
     input.lines().find_map(|line| {
         let parts = line.split('"').collect::<Vec<_>>();
@@ -313,5 +344,37 @@ mod tests {
         let steam = tempfile::tempdir().expect("steam root");
 
         assert!(!is_installed(steam.path()));
+    }
+
+    #[test]
+    fn exports_utf8_cfg_and_adds_missing_extension() {
+        let directory = tempfile::tempdir().expect("export directory");
+        let requested = directory.path().join("训练配置");
+        let exported = export_profile(&requested, "// 配置\nvolume 0.5\n").expect("export");
+
+        assert_eq!(
+            exported.extension().and_then(|value| value.to_str()),
+            Some("cfg")
+        );
+        assert_eq!(
+            fs::read_to_string(exported).expect("read export"),
+            "// 配置\nvolume 0.5\n"
+        );
+    }
+
+    #[test]
+    fn rejects_non_cfg_export_extensions_and_missing_parents() {
+        let directory = tempfile::tempdir().expect("export directory");
+        let wrong_extension = export_profile(&directory.path().join("config.txt"), "");
+        assert_eq!(
+            wrong_extension.expect_err("reject extension").code,
+            "CFG_EXPORT_EXTENSION"
+        );
+        let missing_parent =
+            export_profile(&directory.path().join("missing").join("config.cfg"), "");
+        assert_eq!(
+            missing_parent.expect_err("reject parent").code,
+            "CFG_EXPORT_PARENT_INVALID"
+        );
     }
 }

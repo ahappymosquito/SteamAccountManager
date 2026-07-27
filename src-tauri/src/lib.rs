@@ -823,6 +823,18 @@ fn save_cfg_profile(
 }
 
 #[tauri::command]
+fn export_cfg_profile(state: State<AppState>, id: String, path: String) -> AppResult<String> {
+    let profile = state
+        .db
+        .list_cfg_profiles()?
+        .into_iter()
+        .find(|profile| profile.id == id)
+        .ok_or_else(|| AppError::new("CFG_PROFILE_NOT_FOUND", "找不到该 CFG 方案"))?;
+    cs2::export_profile(&PathBuf::from(path), &profile.content)
+        .map(|exported| exported.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn delete_cfg_profile(state: State<AppState>, id: String) -> AppResult<()> {
     let profile = state
         .db
@@ -1301,6 +1313,7 @@ pub fn run() {
             create_cfg_profile,
             import_cfg_profile,
             save_cfg_profile,
+            export_cfg_profile,
             delete_cfg_profile,
             assign_cfg_profile,
             list_cfg_assignments,

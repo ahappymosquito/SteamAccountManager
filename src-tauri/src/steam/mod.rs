@@ -664,13 +664,17 @@ fn atomic_write_with(
     content: &str,
     replace: impl FnOnce(&Path, &Path) -> Result<(), (i32, i32)>,
 ) -> AppResult<()> {
-    ensure_config_not_busy(path)?;
+    let existing_permissions = if path.exists() {
+        ensure_config_not_busy(path)?;
+        Some(fs::metadata(path)?.permissions())
+    } else {
+        None
+    };
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("loginusers.vdf");
     let temp = path.with_file_name(format!("{file_name}.sam-{}.tmp", uuid::Uuid::new_v4()));
-    let permissions = fs::metadata(path)?.permissions();
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -679,7 +683,9 @@ fn atomic_write_with(
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
         drop(file);
-        fs::set_permissions(&temp, permissions)?;
+        if let Some(permissions) = existing_permissions {
+            fs::set_permissions(&temp, permissions)?;
+        }
         replace(path, &temp).map_err(|(primary, fallback)| {
             AppError::new("ATOMIC_REPLACE_FAILED", "无法原子替换 loginusers.vdf").detail(
                 format!(
