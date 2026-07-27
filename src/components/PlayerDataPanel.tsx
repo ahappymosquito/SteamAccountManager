@@ -10,10 +10,18 @@ const percent = (value?: number) =>
   value === undefined || value === null ? "未知" : `${value.toFixed(1)}%`;
 const matchResult = { win: "胜", loss: "负", tie: "平" } as const;
 
+export const platformDataAge = (fetchedAt: string, now = Date.now()) => {
+  const fetched = Date.parse(fetchedAt);
+  if (!Number.isFinite(fetched)) return "更新时间未知";
+  const minutes = Math.max(0, Math.floor((now - fetched) / 60_000));
+  return minutes === 0 ? "刚刚" : `${minutes} 分钟前`;
+};
+
 export function PlayerDataPanel({ link, onChanged }: { link: PlatformLink; onChanged?: () => void }) {
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [now, setNow] = useState(Date.now());
 
   const perfectWorld = link.platformCode === "perfectworld";
   const platformName = perfectWorld ? "完美平台" : "5E";
@@ -36,6 +44,11 @@ export function PlayerDataPanel({ link, onChanged }: { link: PlatformLink; onCha
   useEffect(() => {
     void load();
   }, [link.id, link.externalId]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   if (loading && !snapshot) {
     return (
@@ -115,7 +128,7 @@ export function PlayerDataPanel({ link, onChanged }: { link: PlatformLink; onCha
 
       {!perfectWorld && <><div className="player-match-heading">
         <strong>最近比赛</strong>
-        <span>{new Date(snapshot.fetchedAt).toLocaleString("zh-CN")} 更新</span>
+        <span>{snapshot.recentMatches.length} 场</span>
       </div>
       {snapshot.recentMatches.length ? (
         <div className="player-match-list">
@@ -143,6 +156,12 @@ export function PlayerDataPanel({ link, onChanged }: { link: PlatformLink; onCha
       ) : (
         <p className="player-message">最近 180 天没有可显示的 CS2 比赛。</p>
       )}</>}
+      <p
+        className="player-updated-at"
+        title={new Date(snapshot.fetchedAt).toLocaleString("zh-CN")}
+      >
+        平台数据更新于 {platformDataAge(snapshot.fetchedAt, now)}
+      </p>
     </section>
   );
 }
