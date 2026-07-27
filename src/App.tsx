@@ -561,6 +561,12 @@ function AccountsPage({
                     {(account.platformCodes ?? []).map((code) => (
                       <span className="platform-badge" key={code}>
                         {platformLabels[code]}
+                        {account.playerRanks?.find((rank) => rank.platform === code)?.rankName
+                          ? ` ${account.playerRanks.find((rank) => rank.platform === code)!.rankName}`
+                          : ""}
+                        {account.playerRanks?.find((rank) => rank.platform === code)?.score !== undefined
+                          ? ` ${Math.round(account.playerRanks.find((rank) => rank.platform === code)!.score!)}`
+                          : ""}
                       </span>
                     ))}
                     {!(account.platformCodes ?? []).length && (

@@ -1,7 +1,8 @@
 /** Shared frontend models matching the validated Tauri command payloads. */
 export type PlatformCode = "perfectworld"|"5e"|"faceit"|"other";
 export type Theme = "aurora"|"violet"|"mint"|"glacier"|"daylight"|"lilac";
-export type Account = { id:string; steamId64:string; accountName?:string; personaName?:string; lastLocalSeenAt?:string; lastSwitchedAt?:string; createdAt:string; updatedAt:string; alias?:string; remark?:string; groupName?:string; favorite:boolean; tags:string[]; platformCodes:PlatformCode[]; avatarPath?:string };
+export type PlayerRankSummary = { platform:string; rankName?:string; score?:number; scoreSource?:string; stale:boolean };
+export type Account = { id:string; steamId64:string; accountName?:string; personaName?:string; lastLocalSeenAt?:string; lastSwitchedAt?:string; createdAt:string; updatedAt:string; alias?:string; remark?:string; groupName?:string; favorite:boolean; tags:string[]; platformCodes:PlatformCode[]; playerRanks?:PlayerRankSummary[]; avatarPath?:string };
 export type ProfileInput = { accountId:string; alias?:string; remark?:string; favorite:boolean; tags:string[] };
 export type TagOption = { name:string; usageCount:number };
 export type PlatformLink = { id:string; steamAccountId:string; platformCode:string; externalId?:string; displayName?:string; profileUrl?:string; remark?:string; status:"unverified"|"user_confirmed"|"invalid"; lastVerifiedAt?:string };

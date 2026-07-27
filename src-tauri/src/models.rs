@@ -30,7 +30,18 @@ pub struct Account {
     pub favorite: bool,
     pub tags: Vec<String>,
     pub platform_codes: Vec<String>,
+    pub player_ranks: Vec<PlayerRankSummary>,
     pub avatar_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerRankSummary {
+    pub platform: String,
+    pub rank_name: Option<String>,
+    pub score: Option<f64>,
+    pub score_source: Option<String>,
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

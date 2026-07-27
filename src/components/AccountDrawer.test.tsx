@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   saveLink: vi.fn(),
   deleteLink: vi.fn(),
   playerData: vi.fn(),
+  platformCredentialStatus: vi.fn(),
+  autoLinkPerfectWorld: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => path }));
 vi.mock("../lib/api", () => ({ api: mocks }));
@@ -32,6 +34,14 @@ describe("AccountDrawer", () => {
       warnings: [],
       fetchedAt: "2026-07-27T08:00:00Z",
       stale: false,
+    });
+    mocks.platformCredentialStatus.mockResolvedValue({
+      platformCode: "perfectworld",
+      configured: false,
+      expired: false,
+    });
+    mocks.autoLinkPerfectWorld.mockResolvedValue({
+      capabilities: ["season_ladder"],
     });
   });
 
@@ -86,6 +96,30 @@ describe("AccountDrawer", () => {
       ),
     );
     expect(mocks.playerData).not.toHaveBeenCalled();
+  });
+
+  it("automatically matches Perfect World with the account SteamID when a token is configured", async () => {
+    mocks.platformCredentialStatus.mockResolvedValue({
+      platformCode: "perfectworld",
+      configured: true,
+      expired: false,
+    });
+    mocks.links
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: "perfectworld-link",
+        steamAccountId: account.id,
+        platformCode: "perfectworld",
+        externalId: account.steamId64,
+        status: "user_confirmed",
+      }]);
+
+    render(<AccountDrawer account={account} tagOptions={[]} open onOpenChange={vi.fn()} onSave={vi.fn()} notify={vi.fn()} onChanged={vi.fn()} />);
+
+    await waitFor(() =>
+      expect(mocks.autoLinkPerfectWorld).toHaveBeenCalledWith(account.id),
+    );
+    expect(await screen.findByText("已使用 SteamID 自动匹配完美平台账号。")).toBeInTheDocument();
   });
 
   it("does not render a player query for a platform-only 5E link", async () => {

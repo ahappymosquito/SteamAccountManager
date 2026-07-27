@@ -19,6 +19,7 @@ export const api = {
   saveLink: (input:Omit<PlatformLink,"lastVerifiedAt">) => invoke<void>("save_platform_link", { input }),
   deleteLink: (id:string) => invoke<void>("delete_platform_link", { id }),
   playerData: (platformLinkId:string,forceRefresh=false) => invoke<PlayerSnapshot>("query_player_data", { platformLinkId,forceRefresh }),
+  autoLinkPerfectWorld: (steamAccountId:string,forceRefresh=false) => invoke<PlayerSnapshot>("auto_link_perfectworld", { steamAccountId,forceRefresh }),
   savePlatformCredential: (platformCode:string,token?:string) => invoke<void>("save_platform_credential", { platformCode,token:token||null }),
   platformCredentialStatus: (platformCode:string) => invoke<PlatformCredentialStatus>("get_platform_credential_status", { platformCode }),
   settings: () => invoke<Record<string,unknown>>("get_settings"),
