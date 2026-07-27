@@ -25,6 +25,10 @@ describe("TitleBar", () => {
       <TitleBar theme="glacier" onThemeChange={vi.fn()} />,
     );
     expect(container.querySelector("[data-tauri-drag-region]")).toBeNull();
+    expect(container.querySelector(".window-title img")).toHaveAttribute(
+      "src",
+      "/app-icon.png",
+    );
 
     fireEvent.mouseDown(screen.getByText("Steam Account Manager"), {
       button: 0,

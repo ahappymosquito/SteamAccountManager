@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
-import { invoke } from "@tauri-apps/api/core";
-import type { Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, Cs2Config, Cs2RuntimeFile, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformLink, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption } from "./types";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import type { Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, Cs2Config, Cs2RuntimeFile, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformLink, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption, UpdateInfo, UpdateProgress } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -47,5 +47,11 @@ export const api = {
   exportData: (includeSettings:boolean) => invoke<Record<string,unknown>>("export_data", { includeSettings }),
   previewImport: (data:unknown) => invoke<ImportPreview>("preview_import", { data }),
   applyImport: (data:unknown,overwrite:boolean) => invoke<ImportPreview>("apply_import", { data,overwrite }),
-  restoreBackup: () => invoke<void>("restore_latest_backup")
+  restoreBackup: () => invoke<void>("restore_latest_backup"),
+  checkAppUpdate: () => invoke<UpdateInfo | null>("check_app_update"),
+  installAppUpdate: (onProgress:(progress:UpdateProgress)=>void) => {
+    const onEvent = new Channel<UpdateProgress>();
+    onEvent.onmessage = onProgress;
+    return invoke<void>("install_app_update", { onEvent });
+  }
 };

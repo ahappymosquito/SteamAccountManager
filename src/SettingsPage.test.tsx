@@ -1,12 +1,20 @@
-/** Settings tests for Steam configuration and intentionally collapsed recovery tools. */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+/** Settings tests for Steam configuration, project safety details, links, and recovery tools. */
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   setSteamPath: vi.fn(),
   setSetting: vi.fn(),
   discoverSteam: vi.fn(),
+  getVersion: vi.fn(),
+  openUrl: vi.fn(),
 }));
 
 vi.mock("./lib/api", () => ({
@@ -20,10 +28,14 @@ vi.mock("./lib/api", () => ({
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: mocks.getVersion }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.openUrl }));
 
 import { SettingsPage } from "./App";
 
 describe("SettingsPage", () => {
+  afterEach(cleanup);
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.settings.mockResolvedValue({
@@ -32,6 +44,8 @@ describe("SettingsPage", () => {
     });
     mocks.setSteamPath.mockResolvedValue(undefined);
     mocks.setSetting.mockResolvedValue(undefined);
+    mocks.getVersion.mockResolvedValue("0.4.2");
+    mocks.openUrl.mockResolvedValue(undefined);
   });
 
   it("persists Steam path and timeout while recovery stays low priority", async () => {
@@ -51,5 +65,75 @@ describe("SettingsPage", () => {
     );
     expect(mocks.setSetting).toHaveBeenCalledWith("shutdown_timeout", 20);
     expect(configured).toHaveBeenCalled();
+  });
+
+  it("shows the local version, safety boundaries, and official project links", async () => {
+    render(<SettingsPage notify={vi.fn()} onConfigured={vi.fn()} />);
+
+    expect(await screen.findByText("v0.4.2")).toBeInTheDocument();
+    expect(
+      screen.getByText(/不注入 Steam 或游戏进程/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/不能代表 Valve 承诺绝对零风险/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看 GitHub" }));
+    await waitFor(() =>
+      expect(mocks.openUrl).toHaveBeenCalledWith(
+        "https://github.com/ahappymosquito/SteamAccountManager",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "查看 Releases" }));
+    await waitFor(() =>
+      expect(mocks.openUrl).toHaveBeenCalledWith(
+        "https://github.com/ahappymosquito/SteamAccountManager/releases",
+      ),
+    );
+  });
+
+  it("keeps project links available when the runtime version is unavailable", async () => {
+    mocks.getVersion.mockRejectedValueOnce(new Error("version unavailable"));
+    render(<SettingsPage notify={vi.fn()} onConfigured={vi.fn()} />);
+
+    expect(await screen.findByText("v未知")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "查看 GitHub" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "查看 Releases" }),
+    ).toBeEnabled();
+  });
+
+  it("shows signed update details and portable conversion action", async () => {
+    const onCheckUpdate = vi.fn();
+    const onInstallUpdate = vi.fn();
+    render(
+      <SettingsPage
+        notify={vi.fn()}
+        onConfigured={vi.fn()}
+        update={{
+          currentVersion: "0.4.3",
+          version: "0.5.0",
+          notes: "新增自动更新",
+          portable: true,
+        }}
+        updateProgress={{
+          state: "downloading",
+          downloaded: 25,
+          total: 100,
+        }}
+        onCheckUpdate={onCheckUpdate}
+        onInstallUpdate={onInstallUpdate}
+      />,
+    );
+
+    expect(await screen.findByText("v0.5.0")).toBeInTheDocument();
+    expect(screen.getByText(/当前为便携版/)).toBeInTheDocument();
+    expect(screen.getByText("正在下载 25%")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /正在更新/ }),
+    ).toBeDisabled();
   });
 });

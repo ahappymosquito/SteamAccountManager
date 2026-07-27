@@ -1,6 +1,6 @@
 [package]
 name = "steam-account-manager"
-version = "0.4.0"
+version = "0.5.1"
 description = "Local Steam account manager for Windows"
 authors = ["Steam Account Manager Contributors"]
 edition = "2021"
@@ -17,6 +17,7 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-updater = "2.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
