@@ -1,4 +1,4 @@
-# Copies local Windows test artifacts and optionally creates the publication archive.
+# Archives prior Windows artifacts, copies current builds, and optionally creates the publication archive.
 param(
     [switch]$IncludeReleaseArchive
 )
@@ -38,6 +38,31 @@ if ($installerMatches.Count -ne 1) {
 
 $releaseDirectory = Join-Path $projectRoot "release"
 New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
+$historyDirectory = Join-Path $releaseDirectory "history"
+New-Item -ItemType Directory -Path $historyDirectory -Force | Out-Null
+
+# Keep release/ focused on the newest build while preserving every older artifact.
+$archiveStamp = Get-Date -Format "yyyyMMdd-HHmmss"
+foreach ($existing in @(
+    Get-ChildItem -LiteralPath $releaseDirectory -Force |
+        Where-Object { $_.FullName -ne $historyDirectory }
+)) {
+    $archiveDestination = Join-Path $historyDirectory $existing.Name
+    if (Test-Path -LiteralPath $archiveDestination) {
+        if ($existing.PSIsContainer) {
+            $archiveName = "{0}-{1}-{2}" -f $existing.Name, $archiveStamp, [System.Guid]::NewGuid().ToString("N").Substring(0, 8)
+        }
+        else {
+            $archiveName = "{0}-{1}-{2}{3}" -f `
+                [System.IO.Path]::GetFileNameWithoutExtension($existing.Name), `
+                $archiveStamp, `
+                [System.Guid]::NewGuid().ToString("N").Substring(0, 8), `
+                $existing.Extension
+        }
+        $archiveDestination = Join-Path $historyDirectory $archiveName
+    }
+    Move-Item -LiteralPath $existing.FullName -Destination $archiveDestination
+}
 
 $installerDestination = Join-Path $releaseDirectory $installerMatches[0].Name
 Copy-Item -LiteralPath $installerMatches[0].FullName -Destination $installerDestination -Force

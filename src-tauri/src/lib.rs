@@ -25,10 +25,14 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    thread,
     time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
+
+const PLAYER_CACHE_TTL_MINUTES: i64 = 15;
+const FIVE_E_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 pub struct AppState {
     db: Arc<Database>,
@@ -248,6 +252,128 @@ fn delete_platform_link(state: State<AppState>, id: String) -> AppResult<()> {
     state.db.delete_link(&id)
 }
 
+fn player_snapshot_cache(
+    db: &Database,
+    platform_link_id: &str,
+) -> AppResult<Option<(PlayerSnapshot, String)>> {
+    Ok(db
+        .player_snapshot_cache(platform_link_id)?
+        .and_then(|(payload, expires_at)| {
+            serde_json::from_str::<PlayerSnapshot>(&payload)
+                .ok()
+                .map(|snapshot| (snapshot, expires_at))
+        }))
+}
+
+fn cached_snapshot_is_usable(
+    platform_code: &str,
+    force_refresh: bool,
+    expires_at: &str,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    !force_refresh
+        && (platform_code == "5e"
+            || chrono::DateTime::parse_from_rfc3339(expires_at).is_ok_and(|expires| expires > now))
+}
+
+fn refresh_player_link(
+    db: &Database,
+    link: PlatformLink,
+    cached: Option<(PlayerSnapshot, String)>,
+) -> AppResult<PlayerSnapshot> {
+    let external_id = link
+        .external_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::new("PLAYER_ID_MISSING", "请先填写平台玩家标识"))?
+        .to_string();
+    let token = player_query::load_credential(&link.platform_code)?;
+    let query = player_query::PlayerQuery::new()?;
+    let fetched = match link.platform_code.as_str() {
+        "5e" => query.query_five_e(&external_id, token.as_deref()),
+        "perfectworld" => query.query_perfect_world(&external_id, token.as_deref()),
+        _ => {
+            return Err(AppError::new(
+                "PLAYER_PLATFORM_UNSUPPORTED",
+                "该平台暂不支持玩家数据查询",
+            ))
+        }
+    };
+
+    match fetched {
+        Ok((snapshot, token_expired)) => {
+            let verified = snapshot.platform != "perfectworld"
+                || snapshot
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == "season_ladder");
+            db.save_link(&PlatformLinkInput {
+                id: Some(link.id.clone()),
+                steam_account_id: link.steam_account_id,
+                platform_code: link.platform_code.clone(),
+                external_id: Some(snapshot.external_id.clone()),
+                display_name: snapshot.nickname.clone().or(link.display_name),
+                profile_url: link.profile_url,
+                remark: link.remark,
+                status: if verified {
+                    "user_confirmed".to_string()
+                } else {
+                    "unverified".to_string()
+                },
+            })?;
+            db.set_setting(
+                &format!("credential.{}.expired", link.platform_code),
+                if token_expired { "true" } else { "false" },
+            )?;
+            let expires_at =
+                (Utc::now() + chrono::Duration::minutes(PLAYER_CACHE_TTL_MINUTES)).to_rfc3339();
+            let payload = serde_json::to_string(&snapshot)
+                .map_err(|_| AppError::new("PLAYER_CACHE_FAILED", "无法保存玩家数据缓存"))?;
+            db.save_player_snapshot_cache(&link.id, &payload, &snapshot.fetched_at, &expires_at)?;
+            Ok(snapshot)
+        }
+        Err(error) => {
+            if error.code == "PLAYER_CREDENTIAL_EXPIRED" {
+                db.set_setting(
+                    &format!("credential.{}.expired", link.platform_code),
+                    "true",
+                )?;
+            }
+            if let Some((mut snapshot, _)) = cached {
+                snapshot.stale = true;
+                snapshot
+                    .warnings
+                    .push(format!("刷新失败，正在显示缓存数据：{}", error.message));
+                Ok(snapshot)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+fn refresh_all_linked_five_e_players(db: &Database) {
+    let Ok(links) = db.refreshable_five_e_links() else {
+        return;
+    };
+    for link in links {
+        let cached = player_snapshot_cache(db, &link.id).ok().flatten();
+        let _ = refresh_player_link(db, link, cached);
+    }
+}
+
+fn start_five_e_refresh_worker(db: Arc<Database>) -> std::io::Result<()> {
+    thread::Builder::new()
+        .name("five-e-player-refresh".to_string())
+        .spawn(move || loop {
+            let cycle_started = Instant::now();
+            refresh_all_linked_five_e_players(&db);
+            thread::sleep(FIVE_E_REFRESH_INTERVAL.saturating_sub(cycle_started.elapsed()));
+        })
+        .map(|_| ())
+}
+
 #[tauri::command]
 async fn query_player_data(
     state: State<'_, AppState>,
@@ -264,101 +390,26 @@ async fn query_player_data(
             "该平台暂不支持玩家数据查询",
         ));
     }
-    let external_id = link
-        .external_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::new("PLAYER_ID_MISSING", "请先填写平台玩家标识"))?
-        .to_string();
-    let cached =
-        state
-            .db
-            .player_snapshot_cache(&platform_link_id)?
-            .and_then(|(payload, expires_at)| {
-                serde_json::from_str::<PlayerSnapshot>(&payload)
-                    .ok()
-                    .map(|snapshot| (snapshot, expires_at))
-            });
-    if !force_refresh {
-        if let Some((snapshot, expires_at)) = &cached {
-            if chrono::DateTime::parse_from_rfc3339(expires_at)
-                .is_ok_and(|expires| expires > Utc::now())
+    let cached = player_snapshot_cache(&state.db, &platform_link_id)?;
+    if let Some((mut snapshot, expires_at)) = cached.clone() {
+        if cached_snapshot_is_usable(&link.platform_code, force_refresh, &expires_at, Utc::now()) {
+            if link.platform_code == "5e"
+                && chrono::DateTime::parse_from_rfc3339(&expires_at)
+                    .is_ok_and(|expires| expires <= Utc::now())
             {
-                return Ok(snapshot.clone());
-            }
-        }
-    }
-
-    let platform_code = link.platform_code.clone();
-    let token = player_query::load_credential(&platform_code)?;
-    let query_external_id = external_id.clone();
-    let query_token = token.clone();
-    let fetched = tauri::async_runtime::spawn_blocking(move || {
-        let query = player_query::PlayerQuery::new()?;
-        match platform_code.as_str() {
-            "5e" => query.query_five_e(&query_external_id, query_token.as_deref()),
-            "perfectworld" => query.query_perfect_world(&query_external_id, query_token.as_deref()),
-            _ => unreachable!(),
-        }
-    })
-    .await
-    .map_err(|_| AppError::new("PLAYER_QUERY_FAILED", "玩家数据后台查询失败"))?;
-
-    match fetched {
-        Ok((snapshot, token_expired)) => {
-            let verified = snapshot.platform != "perfectworld"
-                || snapshot
-                    .capabilities
-                    .iter()
-                    .any(|capability| capability == "season_ladder");
-            state.db.save_link(&PlatformLinkInput {
-                id: Some(link.id.clone()),
-                steam_account_id: link.steam_account_id.clone(),
-                platform_code: link.platform_code.clone(),
-                external_id: Some(snapshot.external_id.clone()),
-                display_name: snapshot.nickname.clone().or(link.display_name.clone()),
-                profile_url: link.profile_url.clone(),
-                remark: link.remark.clone(),
-                status: if verified {
-                    "user_confirmed".to_string()
-                } else {
-                    "unverified".to_string()
-                },
-            })?;
-            state.db.set_setting(
-                &format!("credential.{}.expired", link.platform_code),
-                if token_expired { "true" } else { "false" },
-            )?;
-            let expires_at = (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
-            let payload = serde_json::to_string(&snapshot)
-                .map_err(|_| AppError::new("PLAYER_CACHE_FAILED", "无法保存玩家数据缓存"))?;
-            state.db.save_player_snapshot_cache(
-                &platform_link_id,
-                &payload,
-                &snapshot.fetched_at,
-                &expires_at,
-            )?;
-            Ok(snapshot)
-        }
-        Err(error) => {
-            if error.code == "PLAYER_CREDENTIAL_EXPIRED" {
-                state.db.set_setting(
-                    &format!("credential.{}.expired", link.platform_code),
-                    "true",
-                )?;
-            }
-            if let Some((mut snapshot, _)) = cached {
                 snapshot.stale = true;
                 snapshot
                     .warnings
-                    .push(format!("刷新失败，正在显示缓存数据：{}", error.message));
-                Ok(snapshot)
-            } else {
-                Err(error)
+                    .push("后台定时刷新尚未完成，正在显示上次数据".to_string());
             }
+            return Ok(snapshot);
         }
     }
+
+    let db = Arc::clone(&state.db);
+    tauri::async_runtime::spawn_blocking(move || refresh_player_link(&db, link, cached))
+        .await
+        .map_err(|_| AppError::new("PLAYER_QUERY_FAILED", "玩家数据后台查询失败"))?
 }
 
 #[tauri::command]
@@ -1202,8 +1253,11 @@ pub fn run() {
             fs::create_dir_all(&data_dir)?;
             let db = Database::open(&data_dir.join("steam-account-manager.db"))
                 .map_err(|e| e.message)?;
+            let db = Arc::new(db);
+            start_five_e_refresh_worker(Arc::clone(&db))
+                .map_err(|error| format!("5E refresh worker: {error}"))?;
             app.manage(AppState {
-                db: Arc::new(db),
+                db,
                 data_dir,
                 switch_lock: AtomicBool::new(false),
                 launch_lock: Mutex::new(()),
@@ -1317,6 +1371,20 @@ mod tests {
             select_steam_path(None, || Ok(None)).expect("select path"),
             None
         );
+    }
+
+    #[test]
+    fn five_e_details_use_cached_data_until_the_background_worker_replaces_it() {
+        let now = Utc::now();
+        let expired = (now - chrono::Duration::minutes(1)).to_rfc3339();
+        assert!(cached_snapshot_is_usable("5e", false, &expired, now));
+        assert!(!cached_snapshot_is_usable("5e", true, &expired, now));
+        assert!(!cached_snapshot_is_usable(
+            "perfectworld",
+            false,
+            &expired,
+            now
+        ));
     }
 
     #[test]

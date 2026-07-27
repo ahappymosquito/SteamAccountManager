@@ -48,7 +48,7 @@ impl PlayerQuery {
     pub fn new() -> AppResult<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(15))
-            .user_agent("SteamAccountManager/0.6.4")
+            .user_agent("SteamAccountManager/0.6.5")
             .build()
             .map_err(|_| AppError::new("PLAYER_HTTP_INIT_FAILED", "无法初始化玩家数据网络连接"))?;
         Ok(Self {

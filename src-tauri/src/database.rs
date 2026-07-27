@@ -250,6 +250,33 @@ impl Database {
         Ok(links)
     }
 
+    pub fn refreshable_five_e_links(&self) -> AppResult<Vec<PlatformLink>> {
+        let conn = self.0.lock();
+        let mut stmt = conn.prepare(
+            "SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.remark,p.status,p.last_verified_at
+             FROM account_platform_links l
+             JOIN platform_accounts p ON p.id=l.platform_account_id
+             WHERE p.platform_code='5e' AND TRIM(COALESCE(p.external_id,''))<>''
+             ORDER BY l.id",
+        )?;
+        let links = stmt
+            .query_map([], |row| {
+                Ok(PlatformLink {
+                    id: row.get(0)?,
+                    steam_account_id: row.get(1)?,
+                    platform_code: row.get(2)?,
+                    external_id: row.get(3)?,
+                    display_name: row.get(4)?,
+                    profile_url: row.get(5)?,
+                    remark: row.get(6)?,
+                    status: row.get(7)?,
+                    last_verified_at: row.get(8)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(links)
+    }
+
     pub fn save_link(&self, input: &PlatformLinkInput) -> AppResult<()> {
         if !["perfectworld", "5e", "faceit", "other"].contains(&input.platform_code.as_str()) {
             return Err(AppError::new("INVALID_PLATFORM", "不支持的平台类型"));
@@ -914,6 +941,37 @@ mod tests {
             .player_snapshot_cache("link-5e")
             .expect("read cleared snapshot")
             .is_none());
+    }
+
+    #[test]
+    fn scheduled_five_e_refresh_selects_only_links_with_player_identifiers() {
+        let temp = tempfile::tempdir().expect("temp");
+        let db = Database::open(&temp.path().join("five-e-refresh.db")).expect("db");
+        db.sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
+        let account = db.list_accounts().expect("accounts").remove(0);
+        for (id, platform_code, external_id) in [
+            ("five-e-ready", "5e", Some("玩家名称")),
+            ("five-e-empty", "5e", Some("   ")),
+            ("perfect-ready", "perfectworld", Some("76561198000000001")),
+        ] {
+            db.save_link(&PlatformLinkInput {
+                id: Some(id.into()),
+                steam_account_id: account.id.clone(),
+                platform_code: platform_code.into(),
+                external_id: external_id.map(str::to_string),
+                display_name: None,
+                profile_url: None,
+                remark: None,
+                status: "unverified".into(),
+            })
+            .expect("platform link");
+        }
+
+        let links = db.refreshable_five_e_links().expect("refreshable links");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].id, "five-e-ready");
+        assert_eq!(links[0].external_id.as_deref(), Some("玩家名称"));
     }
 
     #[test]
