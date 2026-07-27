@@ -35,6 +35,7 @@ export const api = {
   createCfgProfile: (name:string,fileName:string,content="") => invoke<CfgProfile>("create_cfg_profile",{name,fileName,content}),
   importCfgProfile: (path:string) => invoke<CfgProfile>("import_cfg_profile",{path}),
   saveCfgProfile: (id:string,name:string,content:string) => invoke<void>("save_cfg_profile",{id,name,content}),
+  exportCfgProfile: (id:string,path:string) => invoke<string>("export_cfg_profile",{id,path}),
   deleteCfgProfile: (id:string) => invoke<void>("delete_cfg_profile",{id}),
   cfgAssignments: () => invoke<AccountCfgAssignment[]>("list_cfg_assignments"),
   assignCfgProfile: (steamAccountId:string,profileId?:string) => invoke<void>("assign_cfg_profile",{steamAccountId,profileId:profileId||null}),
