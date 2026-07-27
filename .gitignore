@@ -8,6 +8,7 @@ vite.config.d.ts
 .playwright-cli/
 release/*.exe
 release/*.zip
+release/history/
 *.db
 *.db-shm
 *.db-wal
