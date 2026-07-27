@@ -6,7 +6,7 @@ import type { PlatformLink, PlayerSnapshot } from "../lib/types";
 const mocks = vi.hoisted(() => ({ playerData: vi.fn() }));
 vi.mock("../lib/api", () => ({ api: { playerData: mocks.playerData } }));
 
-import { PlayerDataPanel } from "./PlayerDataPanel";
+import { platformDataAge, PlayerDataPanel } from "./PlayerDataPanel";
 
 const link: PlatformLink = {
   id: "link-5e",
@@ -56,6 +56,21 @@ describe("PlayerDataPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.playerData.mockResolvedValue(snapshot);
+  });
+
+  it("formats platform data age in whole minutes", () => {
+    expect(
+      platformDataAge(
+        "2026-07-27T08:00:00Z",
+        Date.parse("2026-07-27T08:17:59Z"),
+      ),
+    ).toBe("17 分钟前");
+    expect(
+      platformDataAge(
+        "2026-07-27T08:00:00Z",
+        Date.parse("2026-07-27T08:00:30Z"),
+      ),
+    ).toBe("刚刚");
   });
 
   it("renders the normalized snapshot and stale partial-data state", async () => {
