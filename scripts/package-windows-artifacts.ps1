@@ -10,6 +10,7 @@ $package = Get-Content -Raw (Join-Path $projectRoot "package.json") | ConvertFro
 $version = [string]$package.version
 $targetRelease = Join-Path $projectRoot "src-tauri\target\release"
 $application = Join-Path $targetRelease "steam-account-manager.exe"
+$installerScript = Join-Path $targetRelease "nsis\x64\installer.nsi"
 $installerMatches = @(
     Get-ChildItem -LiteralPath (Join-Path $targetRelease "bundle\nsis") `
         -Filter "*_${version}_x64-setup.exe" -File
@@ -17,6 +18,19 @@ $installerMatches = @(
 
 if (-not (Test-Path -LiteralPath $application -PathType Leaf)) {
     throw "Portable application binary was not produced: $application"
+}
+if (-not (Test-Path -LiteralPath $installerScript -PathType Leaf)) {
+    throw "Generated NSIS script was not produced: $installerScript"
+}
+$installerScriptContent = Get-Content -Raw $installerScript
+foreach ($requiredInstallerText in @(
+    "installer-hooks.nsh",
+    "NSIS_HOOK_POSTINSTALL",
+    "!insertmacro NSIS_HOOK_POSTINSTALL"
+)) {
+    if (-not $installerScriptContent.Contains($requiredInstallerText)) {
+        throw "Generated NSIS script is missing the shortcut refresh hook text: $requiredInstallerText"
+    }
 }
 if ($installerMatches.Count -ne 1) {
     throw "Expected one NSIS installer for version $version, found $($installerMatches.Count)."
