@@ -24,6 +24,10 @@ const apiMock = vi.hoisted(() => ({
   previewCs2RuntimeFile: vi.fn(),
   saveCfgProfile: vi.fn(),
   exportCfgProfile: vi.fn(),
+  settings: vi.fn(),
+  setSetting: vi.fn(),
+  readCfgDefinitionFile: vi.fn(),
+  writeCfgDefinitionFile: vi.fn(),
 }));
 const dialogMock = vi.hoisted(() => ({
   open: vi.fn(),
@@ -56,6 +60,11 @@ describe("Cs2Page", () => {
     apiMock.previewCs2RuntimeFile.mockResolvedValue("volume 0.5");
     apiMock.saveCfgProfile.mockResolvedValue(undefined);
     apiMock.exportCfgProfile.mockResolvedValue("C:\\exports\\autoexec.cfg");
+    apiMock.settings.mockResolvedValue({});
+    apiMock.setSetting.mockResolvedValue(undefined);
+    apiMock.writeCfgDefinitionFile.mockResolvedValue(
+      "C:\\exports\\cs2-cfg-parameters.jsonc",
+    );
     clipboardMock.writeText.mockResolvedValue(undefined);
   });
 
@@ -117,6 +126,46 @@ describe("Cs2Page", () => {
         "cl_crosshairsize 2",
       ),
     );
+  });
+
+  it("exports a JSONC parameter library with the GPT prompt at the top", async () => {
+    dialogMock.save.mockResolvedValue("C:\\exports\\cs2-cfg-parameters.jsonc");
+    render(<Cs2Page notify={vi.fn()} />);
+    await screen.findByDisplayValue("主配置");
+    fireEvent.click(screen.getByRole("button", { name: "导出参数" }));
+    await waitFor(() =>
+      expect(apiMock.writeCfgDefinitionFile).toHaveBeenCalled(),
+    );
+    const [, content] = apiMock.writeCfgDefinitionFile.mock.calls[0];
+    expect(content.startsWith("/*\nGPT 维护提示词：")).toBe(true);
+    expect(content).toContain('"schemaVersion": 1');
+  });
+
+  it("imports, persists, and displays a custom parameter definition", async () => {
+    dialogMock.open.mockResolvedValue("C:\\imports\\cfg-parameters.jsonc");
+    apiMock.readCfgDefinitionFile.mockResolvedValue(`{
+      "schemaVersion": 1,
+      "definitions": [{
+        "command": "custom_training_note",
+        "label": "训练备注",
+        "section": "other",
+        "control": "text",
+        "description": "供训练脚本读取的文本备注。"
+      }]
+    }`);
+    render(<Cs2Page notify={vi.fn()} />);
+    await screen.findByDisplayValue("主配置");
+    fireEvent.click(screen.getByRole("button", { name: "导入参数" }));
+    await waitFor(() =>
+      expect(apiMock.setSetting).toHaveBeenCalledWith(
+        "cfg_command_definitions",
+        expect.arrayContaining([
+          expect.objectContaining({ command: "custom_training_note" }),
+        ]),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /其他命令/ }));
+    expect(screen.getByLabelText("训练备注")).toBeInTheDocument();
   });
 
   it("keeps auxiliary tools collapsed and opens runtime files read-only", async () => {

@@ -650,6 +650,7 @@ fn set_setting(state: State<AppState>, key: String, value: Value) -> AppResult<(
         "backup_directory",
         "theme",
         "steam_path",
+        "cfg_command_definitions",
     ];
     if !allowed.contains(&key.as_str()) {
         return Err(AppError::new("SETTING_NOT_ALLOWED", "不允许修改该设置"));
@@ -660,6 +661,14 @@ fn set_setting(state: State<AppState>, key: String, value: Value) -> AppResult<(
         })
     {
         return Err(AppError::new("SETTING_INVALID", "界面主题无效"));
+    }
+    if key == "cfg_command_definitions"
+        && (!value.is_array() || value.to_string().len() > 2 * 1024 * 1024)
+    {
+        return Err(AppError::new(
+            "SETTING_INVALID",
+            "CFG 参数定义必须是且不超过 2 MB 的数组",
+        ));
     }
     state.db.set_setting(
         &key,
@@ -831,6 +840,17 @@ fn export_cfg_profile(state: State<AppState>, id: String, path: String) -> AppRe
         .find(|profile| profile.id == id)
         .ok_or_else(|| AppError::new("CFG_PROFILE_NOT_FOUND", "找不到该 CFG 方案"))?;
     cs2::export_profile(&PathBuf::from(path), &profile.content)
+        .map(|exported| exported.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn read_cfg_definition_file(path: String) -> AppResult<String> {
+    cs2::read_definition_file(&PathBuf::from(path))
+}
+
+#[tauri::command]
+fn write_cfg_definition_file(path: String, content: String) -> AppResult<String> {
+    cs2::write_definition_file(&PathBuf::from(path), &content)
         .map(|exported| exported.to_string_lossy().into_owned())
 }
 
@@ -1314,6 +1334,8 @@ pub fn run() {
             import_cfg_profile,
             save_cfg_profile,
             export_cfg_profile,
+            read_cfg_definition_file,
+            write_cfg_definition_file,
             delete_cfg_profile,
             assign_cfg_profile,
             list_cfg_assignments,

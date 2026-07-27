@@ -94,6 +94,65 @@ pub fn export_profile(requested: &Path, content: &str) -> AppResult<PathBuf> {
     Ok(path)
 }
 
+pub fn read_definition_file(path: &Path) -> AppResult<String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if !path.is_file()
+        || !["json", "jsonc"]
+            .iter()
+            .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+        || fs::metadata(path)?.len() > MAX_PREVIEW_BYTES
+    {
+        return Err(AppError::new(
+            "CFG_DEFINITION_IMPORT_INVALID",
+            "请选择不超过 2 MB 的 JSON 或 JSONC 参数库",
+        ));
+    }
+    fs::read_to_string(path).map_err(|_| {
+        AppError::new(
+            "CFG_DEFINITION_IMPORT_ENCODING",
+            "参数库不是有效的 UTF-8 文本",
+        )
+    })
+}
+
+pub fn write_definition_file(requested: &Path, content: &str) -> AppResult<PathBuf> {
+    let mut path = requested.to_path_buf();
+    match path.extension().and_then(|value| value.to_str()) {
+        None => {
+            path.set_extension("jsonc");
+        }
+        Some(extension) if extension.eq_ignore_ascii_case("jsonc") => {}
+        Some(_) => {
+            return Err(AppError::new(
+                "CFG_DEFINITION_EXPORT_EXTENSION",
+                "参数库必须使用 .jsonc 扩展名",
+            ));
+        }
+    }
+    path.parent()
+        .filter(|value| value.is_dir())
+        .ok_or_else(|| {
+            AppError::new(
+                "CFG_DEFINITION_EXPORT_PARENT_INVALID",
+                "参数库导出目录不存在或不可用",
+            )
+        })?;
+    if path.is_dir() {
+        return Err(AppError::new(
+            "CFG_DEFINITION_EXPORT_PARENT_INVALID",
+            "参数库导出目录不存在或不可用",
+        ));
+    }
+    steam::atomic_write_text(&path, content).map_err(|error| {
+        AppError::new("CFG_DEFINITION_EXPORT_FAILED", "参数库导出失败")
+            .detail(error.details.unwrap_or(error.code))
+    })?;
+    Ok(path)
+}
+
 fn quoted_value(input: &str, key: &str) -> Option<String> {
     input.lines().find_map(|line| {
         let parts = line.split('"').collect::<Vec<_>>();
@@ -375,6 +434,23 @@ mod tests {
         assert_eq!(
             missing_parent.expect_err("reject parent").code,
             "CFG_EXPORT_PARENT_INVALID"
+        );
+    }
+
+    #[test]
+    fn reads_and_writes_utf8_definition_files() {
+        let directory = tempfile::tempdir().expect("definition directory");
+        let requested = directory.path().join("cfg-parameters");
+        let content = "/* GPT 提示词 */\n{\"schemaVersion\":1,\"definitions\":[]}\n";
+        let exported = write_definition_file(&requested, content).expect("write definition file");
+
+        assert_eq!(
+            exported.extension().and_then(|value| value.to_str()),
+            Some("jsonc")
+        );
+        assert_eq!(
+            read_definition_file(&exported).expect("read definition file"),
+            content
         );
     }
 }
