@@ -1,6 +1,6 @@
 # Steam Account Manager
 
-## 0.5.0 GitHub Release 一键更新
+## 0.5.1 GitHub Release 一键更新
 
 - 启动后静默检查 GitHub 最新 Release，发现新版时提供签名校验后的下载、安装和重启流程。
 - NSIS 安装版支持原地更新；便携版可一键安装新版并转为当前用户安装版。
