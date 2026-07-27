@@ -1,15 +1,16 @@
 {
   "name": "steam-account-manager",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
+    "test:icons": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-icon-assets.ps1",
     "test:watch": "vitest",
     "tauri": "tauri",
-    "package:windows": "npm test && npm run build && cargo fmt --check --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --all-targets && tauri build --bundles nsis",
+    "package:windows": "npm run test:icons && npm test && npm run build && cargo fmt --check --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --all-targets && tauri build --bundles nsis",
     "package:local": "npm run package:windows && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows-artifacts.ps1",
     "package:release": "npm run package:windows && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows-artifacts.ps1 -IncludeReleaseArchive"
   },
