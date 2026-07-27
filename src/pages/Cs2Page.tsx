@@ -14,6 +14,7 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Trash2,
+  Upload,
 } from "lucide-react";
 import {
   CrosshairPreview,
@@ -28,11 +29,14 @@ import {
   definitionFor,
   duplicateCount,
   effectiveCommand,
+  mergeCommandDefinitions,
   parseCfg,
+  parseCommandDefinitionFile,
   removeCommandNode,
   removeScalarCommand,
   sectionLabels,
   sectionOrder,
+  serializeCommandDefinitionFile,
   setScalarCommand,
   updateCommandNode,
   type CfgCommandNode,
@@ -130,6 +134,13 @@ function ScalarSettingRow({
               </option>
             ))}
           </select>
+        ) : definition.control === "text" ? (
+          <input
+            id={`cfg-${definition.command}`}
+            value={value}
+            placeholder="未设置"
+            onChange={(event) => onChange(event.target.value)}
+          />
         ) : (
           <div className="cfg-number-control">
             <input
@@ -238,13 +249,14 @@ export function Cs2Page({
   const [view, setView] = useState<WorkspaceView>("visual");
   const [section, setSection] = useState<CfgSectionId>("crosshair");
   const [background, setBackground] = useState<CrosshairBackground>("dark");
+  const [definitions, setDefinitions] = useState(commandDefinitions);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const gutterRef = useRef<HTMLPreElement>(null);
   const draft = workspace.draft;
   const dirty = workspace.isDirty();
   const document = useMemo(
-    () => parseCfg(draft?.content ?? ""),
-    [draft?.content],
+    () => parseCfg(draft?.content ?? "", definitions),
+    [definitions, draft?.content],
   );
   const crosshair = useMemo(() => readCrosshair(document), [document]);
   const shareCode = useMemo(
@@ -266,6 +278,14 @@ export function Cs2Page({
     void Promise.all([
       refreshProfiles(),
       api.cs2RuntimeFiles().then(setRuntimeFiles).catch(() => setRuntimeFiles([])),
+      api.settings().then((settings) => {
+        const stored = settings.cfg_command_definitions;
+        if (!Array.isArray(stored)) return;
+        const custom = parseCommandDefinitionFile(
+          JSON.stringify({ schemaVersion: 1, definitions: stored }),
+        );
+        setDefinitions(mergeCommandDefinitions(custom));
+      }),
     ]).catch((error) => notify("error", errorMessage(error)));
   }, []);
 
@@ -356,6 +376,47 @@ export function Cs2Page({
     }
   };
 
+  const importDefinitions = async () => {
+    const path = await open({
+      multiple: false,
+      filters: [
+        { name: "CFG 参数库", extensions: ["jsonc", "json"] },
+      ],
+      title: "导入 CFG 参数库",
+    });
+    if (typeof path !== "string") return;
+    try {
+      const imported = parseCommandDefinitionFile(
+        await api.readCfgDefinitionFile(path),
+      );
+      await api.setSetting("cfg_command_definitions", imported);
+      setDefinitions(mergeCommandDefinitions(imported));
+      notify("success", `已导入 ${imported.length} 条参数定义`);
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
+  const exportDefinitions = async () => {
+    const path = await save({
+      defaultPath: "cs2-cfg-parameters.jsonc",
+      filters: [
+        { name: "CFG 参数库", extensions: ["jsonc"] },
+      ],
+      title: "导出 CFG 参数库",
+    });
+    if (!path) return;
+    try {
+      const exported = await api.writeCfgDefinitionFile(
+        path,
+        serializeCommandDefinitionFile(definitions),
+      );
+      notify("success", `参数库已导出到 ${exported}`);
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
   const removeProfile = async () => {
     if (!draft || !confirm(`删除“${draft.name}”？至少会保留一个可用方案。`))
       return;
@@ -410,10 +471,12 @@ export function Cs2Page({
     : dirty
       ? "等待保存"
       : "已保存";
-  const definitions = commandDefinitions.filter(
+  const sectionDefinitions = definitions.filter(
     (definition) => definition.section === section,
   );
-  const known = new Set(definitions.map((definition) => definition.command));
+  const known = new Set(
+    sectionDefinitions.map((definition) => definition.command),
+  );
   const sectionNodes = commandLinesForSection(document, section).filter(
     (node) => !known.has(node.normalizedCommand),
   );
@@ -447,13 +510,13 @@ export function Cs2Page({
           ))}
         </select>
         <button className="button secondary" onClick={() => void importFile()}>
-          <FolderOpen />导入 CFG
+          <FolderOpen /><span>导入 CFG</span>
         </button>
         <button className="button secondary" onClick={() => void createProfile()}>
-          <Plus />新建 CFG
+          <Plus /><span>新建 CFG</span>
         </button>
         <button className="button secondary" onClick={() => void exportFile()}>
-          <Download />导出 CFG
+          <Download /><span>导出 CFG</span>
         </button>
         <code className="exec-preview">+exec {draft?.fileName ?? "autoexec.cfg"}</code>
         <span className={`cfg-save-state ${dirty ? "saving" : "saved"}`}>
@@ -529,19 +592,35 @@ export function Cs2Page({
                   <h2>{sectionLabels[section]}</h2>
                   <p>修改会精准写回对应命令，并沿用 500ms 自动保存。</p>
                 </div>
-                <button
-                  className="button secondary"
-                  onClick={() =>
-                    mutateContent((() => {
-                      const [command, args] = newCommandForSection(section);
-                      return appendCommand(document.source, command, args);
-                    })())
-                  }
-                >
-                  <Plus />添加命令
-                </button>
+                <div className="cfg-metadata-actions">
+                  <button
+                    className="button secondary"
+                    onClick={() => void importDefinitions()}
+                    title="导入 GPT 维护的 JSONC 参数库"
+                  >
+                    <Upload /><span>导入参数</span>
+                  </button>
+                  <button
+                    className="button secondary"
+                    onClick={() => void exportDefinitions()}
+                    title="导出带 GPT 维护提示词的 JSONC 参数库"
+                  >
+                    <Download /><span>导出参数</span>
+                  </button>
+                  <button
+                    className="button secondary"
+                    onClick={() =>
+                      mutateContent((() => {
+                        const [command, args] = newCommandForSection(section);
+                        return appendCommand(document.source, command, args);
+                      })())
+                    }
+                  >
+                    <Plus /><span>添加命令</span>
+                  </button>
+                </div>
               </header>
-              {definitions.map((definition) => (
+              {sectionDefinitions.map((definition) => (
                 <ScalarSettingRow
                   key={definition.command}
                   definition={definition}
@@ -590,7 +669,7 @@ export function Cs2Page({
                   ))}
                 </div>
               )}
-              {!definitions.length && !sectionNodes.length && (
+              {!sectionDefinitions.length && !sectionNodes.length && (
                 <p className="cfg-empty">当前分区还没有命令。</p>
               )}
             </div>

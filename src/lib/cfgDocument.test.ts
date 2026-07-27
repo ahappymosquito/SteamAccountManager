@@ -5,8 +5,10 @@ import {
   duplicateCount,
   effectiveCommand,
   parseCfg,
+  parseCommandDefinitionFile,
   removeCommandNode,
   removeScalarCommand,
+  serializeCommandDefinitionFile,
   setScalarCommand,
   updateCommandNode,
 } from "./cfgDocument";
@@ -94,5 +96,33 @@ describe("CFG document", () => {
     expect(removeScalarCommand("volume 0.2\nfps_max 300\nvolume 0.8\n", "volume")).toBe(
       "\nfps_max 300\n\n",
     );
+  });
+
+  it("roundtrips a GPT-maintainable JSONC parameter library", () => {
+    const definitions = parseCommandDefinitionFile(`// maintained by GPT
+      {
+        "schemaVersion": 1,
+        "definitions": [{
+          "command": "cl_test_value",
+          "label": "测试参数",
+          "section": "other",
+          "control": "number",
+          "description": "测试范围。",
+          "min": 0,
+          "max": 10,
+          "step": 1
+        }]
+      }`);
+    const exported = serializeCommandDefinitionFile(definitions);
+    expect(exported).toContain("GPT 维护提示词");
+    expect(parseCommandDefinitionFile(exported)).toEqual(definitions);
+  });
+
+  it("rejects invalid controls, ranges, and duplicate commands", () => {
+    expect(() =>
+      parseCommandDefinitionFile(
+        '{"schemaVersion":1,"definitions":[{"command":"fps_max","label":"A","description":"A","section":"performance","control":"number","min":10,"max":1},{"command":"fps_max","label":"B","description":"B","section":"performance","control":"switch"}]}',
+      ),
+    ).toThrow(/数字范围无效|无效或重复/);
   });
 });

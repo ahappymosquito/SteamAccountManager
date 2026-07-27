@@ -24,6 +24,11 @@ export type CommandDefinition = {
   options?: Array<{ value: string; label: string }>;
 };
 
+export type CommandDefinitionFile = {
+  schemaVersion: 1;
+  definitions: CommandDefinition[];
+};
+
 export type CfgCommandNode = {
   id: string;
   command: string;
@@ -120,12 +125,169 @@ const definitionMap = new Map(
   commandDefinitions.map((definition) => [definition.command, definition]),
 );
 
-export const definitionFor = (command: string) =>
-  definitionMap.get(command.toLowerCase());
+export const definitionFor = (
+  command: string,
+  definitions: CommandDefinition[] = commandDefinitions,
+) =>
+  definitions === commandDefinitions
+    ? definitionMap.get(command.toLowerCase())
+    : definitions.find(
+        (definition) => definition.command === command.toLowerCase(),
+      );
 
-export function sectionForCommand(command: string): CfgSectionId {
+export function mergeCommandDefinitions(
+  customDefinitions: CommandDefinition[],
+) {
+  const merged = new Map(
+    commandDefinitions.map((definition) => [definition.command, definition]),
+  );
+  for (const definition of customDefinitions) {
+    merged.set(definition.command, definition);
+  }
+  return [...merged.values()];
+}
+
+function stripJsonComments(source: string) {
+  let output = "";
+  let quoted = false;
+  let escaping = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (quoted) {
+      output += character;
+      if (escaping) escaping = false;
+      else if (character === "\\") escaping = true;
+      else if (character === '"') quoted = false;
+    } else if (character === '"') {
+      quoted = true;
+      output += character;
+    } else if (character === "/" && next === "/") {
+      while (index < source.length && source[index] !== "\n") index += 1;
+      output += "\n";
+    } else if (character === "/" && next === "*") {
+      index += 2;
+      while (
+        index < source.length &&
+        !(source[index] === "*" && source[index + 1] === "/")
+      ) {
+        if (source[index] === "\n") output += "\n";
+        index += 1;
+      }
+      index += 1;
+    } else {
+      output += character;
+    }
+  }
+  return output;
+}
+
+const sectionIds = new Set<CfgSectionId>(sectionOrder);
+const controlIds = new Set<CommandControl>([
+  "boolean",
+  "number",
+  "select",
+  "text",
+]);
+
+export function parseCommandDefinitionFile(source: string): CommandDefinition[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(stripJsonComments(source));
+  } catch {
+    throw new Error("参数库不是有效的 JSONC");
+  }
+  const file = value as Partial<CommandDefinitionFile>;
+  if (file.schemaVersion !== 1 || !Array.isArray(file.definitions)) {
+    throw new Error("参数库 schemaVersion 必须为 1，且 definitions 必须是数组");
+  }
+  const commands = new Set<string>();
+  return file.definitions.map((candidate, index) => {
+    const definition = candidate as Partial<CommandDefinition>;
+    const command = definition.command?.trim().toLowerCase() ?? "";
+    if (!/^[a-z_][a-z0-9_]*$/.test(command) || commands.has(command)) {
+      throw new Error(`definitions[${index}].command 无效或重复`);
+    }
+    commands.add(command);
+    if (
+      !definition.label?.trim() ||
+      !definition.description?.trim() ||
+      !definition.section ||
+      !sectionIds.has(definition.section) ||
+      !definition.control ||
+      !controlIds.has(definition.control)
+    ) {
+      throw new Error(`definitions[${index}] 缺少有效的名称、解释、分区或控件类型`);
+    }
+    if (
+      definition.control === "number" &&
+      ((definition.min !== undefined && !Number.isFinite(definition.min)) ||
+        (definition.max !== undefined && !Number.isFinite(definition.max)) ||
+        (definition.step !== undefined &&
+          (!Number.isFinite(definition.step) || definition.step <= 0)) ||
+        (definition.min !== undefined &&
+          definition.max !== undefined &&
+          definition.min >= definition.max))
+    ) {
+      throw new Error(`definitions[${index}] 的数字范围无效`);
+    }
+    if (
+      definition.control === "select" &&
+      (!Array.isArray(definition.options) ||
+        definition.options.length === 0 ||
+        definition.options.some(
+          (option) =>
+            typeof option?.value !== "string" ||
+            !option.label?.trim(),
+        ))
+    ) {
+      throw new Error(`definitions[${index}].options 无效`);
+    }
+    return {
+      command,
+      label: definition.label.trim(),
+      section: definition.section,
+      control: definition.control,
+      description: definition.description.trim(),
+      ...(definition.min === undefined ? {} : { min: definition.min }),
+      ...(definition.max === undefined ? {} : { max: definition.max }),
+      ...(definition.step === undefined ? {} : { step: definition.step }),
+      ...(definition.control === "boolean"
+        ? { options: booleanOptions }
+        : definition.options
+          ? { options: definition.options }
+          : {}),
+    };
+  });
+}
+
+export function serializeCommandDefinitionFile(
+  definitions: CommandDefinition[],
+) {
+  const prompt = `/*
+GPT 维护提示词：
+你正在维护 Steam Account Manager 的 CS2 CFG 参数库。
+请查证 CS2 当前可用的控制台命令，并只修改下方 definitions 数组。
+每项必须包含 command、label、section、control、description。
+section 只能是 crosshair、audio、binds、input、hud、performance、scripts、practice、other。
+control 只能是 boolean、number、select、text。
+number 应提供准确的 min、max、step；select 必须提供 value/label 选项；boolean 不需要 options。
+description 用简洁中文解释参数效果、单位和特殊值，不确定的范围不要猜测，可改用 text。
+保留 schemaVersion: 1，输出完整 JSONC，不要输出 Markdown 代码围栏或额外说明。
+*/`;
+  return `${prompt}\n${JSON.stringify(
+    { schemaVersion: 1, definitions },
+    null,
+    2,
+  )}\n`;
+}
+
+export function sectionForCommand(
+  command: string,
+  definitions: CommandDefinition[] = commandDefinitions,
+): CfgSectionId {
   const value = command.toLowerCase();
-  const defined = definitionFor(value);
+  const defined = definitionFor(value, definitions);
   if (defined) return defined.section;
   if (value.startsWith("cl_crosshair") || value === "cl_fixedcrosshairgap") return "crosshair";
   if (["bind", "unbind", "unbindall", "bindtoggle", "key_listboundkeys"].includes(value)) return "binds";
@@ -174,7 +336,10 @@ function firstTokenEnd(input: string): number {
   return index;
 }
 
-export function parseCfg(source: string): CfgDocument {
+export function parseCfg(
+  source: string,
+  definitions: CommandDefinition[] = commandDefinitions,
+): CfgDocument {
   const commands: CfgCommandNode[] = [];
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
   let lineStart = 0;
@@ -236,7 +401,7 @@ export function parseCfg(source: string): CfgDocument {
         args: tokens.slice(1),
         argumentText: trimmed.slice(tokenEnd).trim(),
         raw: trimmed,
-        section: sectionForCommand(command),
+        section: sectionForCommand(command, definitions),
         line: lineNumber,
         start,
         end,
