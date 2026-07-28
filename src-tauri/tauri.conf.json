@@ -1,14 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Steam Account Manager",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "identifier": "com.steamaccountmanager.desktop",
   "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
   "app": {
     "windows": [{ "label": "main", "title": "Steam Account Manager", "width": 1180, "height": 760, "minWidth": 820, "minHeight": 600, "resizable": true, "decorations": false }],
     "security": {
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost",
-      "assetProtocol": { "enable": true, "scope": ["$APPDATA/com.steamaccountmanager.desktop/avatars/**/*"] }
+      "assetProtocol": { "enable": true, "scope": ["$APPDATA/avatars/**/*"] }
     }
   },
   "plugins": {

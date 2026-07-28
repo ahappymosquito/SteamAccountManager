@@ -1,5 +1,12 @@
 # Steam Account Manager
 
+## 0.7.1 平台检测与切号行为修复
+
+- 5E 与 TeamSpeak 3 的自动检测覆盖常见安装目录和 Windows 卸载注册表信息；完美世界、5E 与 TeamSpeak 3 自动检测失败时仍可手动选择启动程序。
+- 平台页检测到软件已安装后只提供“启动软件”，未检测到时才显示路径选择等安装兜底操作。
+- 修正 Steam 本地头像的 WebView 资源权限；头像缺失、暂时无法读取或缓存更新时统一使用首字母回退并允许重试。
+- 切换账号时仍会在本机已安装 CS2 的情况下同步并校验所选 CFG，但完成后只按目标账号重新启动 Steam，不再自动启动 CS2 或任何关联平台。
+
 ## 0.7.0 平台数据更新时间
 
 - 5E 与完美平台玩家数据面板底部显示“平台数据更新于 N 分钟前”，使用缓存快照的 `fetchedAt` 计算，并在面板打开期间每分钟自动更新。
@@ -288,11 +295,11 @@ git push origin v0.1.3
 
 ## 账号发现原理
 
-应用启动时优先验证已保存的 Steam 路径；路径不存在或失效时，依次读取当前用户和本机的 Valve Steam 注册表项，检查 `SteamPath` 或 `InstallPath`，然后验证 `steam.exe` 和 `config\loginusers.vdf`。路径有效时会自动扫描账号和头像，同时从常见安装目录及 Windows 卸载注册表项检测完美世界竞技平台和 5E 客户端；已有平台配置不会被自动检测结果覆盖。VDF 解析器使用支持 UTF-8 中文名称的 tokenizer 和结构树，不使用正则粗暴解析；扫描时额外字段会被忽略但不会删除。
+应用启动时优先验证已保存的 Steam 路径；路径不存在或失效时，依次读取当前用户和本机的 Valve Steam 注册表项，检查 `SteamPath` 或 `InstallPath`，然后验证 `steam.exe` 和 `config\loginusers.vdf`。路径有效时会自动扫描账号和头像，同时从常见安装目录及 Windows 卸载注册表项检测完美世界竞技平台、5E 与 TeamSpeak 3；已有平台配置不会被自动检测结果覆盖。VDF 解析器使用支持 UTF-8 中文名称的 tokenizer 和结构树，不使用正则粗暴解析；扫描时额外字段会被忽略但不会删除。
 
 ## 账号切换原理
 
-切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出；本机已安装 CS2 时，先复制所选 CFG 到 `game\csgo\cfg` 并校验 SHA-256，再只替换本应用此前管理的 `+exec` 参数，保留其他启动参数。通过后才创建安全备份，将目标账号设置为 `MostRecent=1` 和 `AllowAutoLogin=1`，写入注册表 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam；未安装 CS2 时跳过全部 CS2 配置步骤。Steam 登录确认成功后，已安装的 CS2 和目标账号有效关联的平台会一并启动。任一必要检查失败都会记录具体原因。
+切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出；本机已安装 CS2 时，先复制所选 CFG 到 `game\csgo\cfg` 并校验 SHA-256，再只替换本应用此前管理的 `+exec` 参数，保留其他启动参数。通过后才创建安全备份，将目标账号设置为 `MostRecent=1` 和 `AllowAutoLogin=1`，写入注册表 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam；未安装 CS2 时跳过全部 CS2 配置步骤。切换完成后仅自动重新启动 Steam，不会自动启动 CS2 或目标账号关联的第三方平台；需要时可从平台页手动启动软件。任一必要检查失败都会记录具体原因。
 
 应用会在写入后以及 Steam 稳定启动后重新检查 VDF 和注册表。只有目标账号仍为唯一的最近账号、已记住密码并允许自动登录时才记录切换成功；如果 Steam 回写或清除了这些状态，应用会提示在官方客户端重新登录并勾选“记住我”。
 

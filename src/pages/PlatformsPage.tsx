@@ -67,6 +67,7 @@ export function PlatformsPage({
       ),
     );
     setLinks(Object.fromEntries(accountLinks));
+    return statuses;
   };
 
   useEffect(() => {
@@ -94,8 +95,9 @@ export function PlatformsPage({
     try {
       const found = await api.discoverPlatformApps();
       await Promise.all(found.map((item) => api.savePlatformApp(item)));
-      await load();
-      notify("success", `检测到 ${found.length} 个平台客户端`);
+      const statuses = await load();
+      const installed = statuses.filter((item) => item.installed).length;
+      notify("success", `检测到 ${installed} 个已安装软件`);
     } catch (error) {
       notify("error", errorMessage(error));
     } finally {
@@ -104,7 +106,6 @@ export function PlatformsPage({
   };
 
   const choose = async (item: SoftwareStatus) => {
-    if (item.code === "teamspeak3") return;
     const selected = await open({
       multiple: false,
       filters: [{ name: "Windows 程序", extensions: ["exe"] }],
@@ -112,7 +113,7 @@ export function PlatformsPage({
     });
     if (typeof selected !== "string") return;
     const app: PlatformApp = {
-      platformCode: item.code,
+      platformCode: item.code as PlatformApp["platformCode"],
       name: item.name,
       executablePath: selected,
       arguments: [],
@@ -259,7 +260,7 @@ export function PlatformsPage({
                 {item.installed ? "已安装" : "未安装"}
               </span>
               <div className="software-actions">
-                {item.code !== "teamspeak3" && (
+                {!item.installed && (
                   <button
                     className="button secondary compact-action"
                     onClick={() => void choose(item)}

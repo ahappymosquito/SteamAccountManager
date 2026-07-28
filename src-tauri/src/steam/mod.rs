@@ -29,6 +29,10 @@ const FIVE_E_EXECUTABLES: &[&str] = &[
     "5E.exe",
     "Client.exe",
 ];
+const PERFECTWORLD_FOLDERS: &[&str] =
+    &["perfectworldarena", "PerfectWorldArena", "完美世界竞技平台"];
+const FIVE_E_FOLDERS: &[&str] = &["5EClient", "5E", "5EPlay", "5eplay", "5E对战平台"];
+const REGISTRY_INSTALL_SCAN_DEPTH: usize = 3;
 
 fn platform_specs() -> [(
     &'static str,
@@ -131,11 +135,6 @@ pub fn discover_cs2_configs(steam_dir: &Path) -> AppResult<Vec<Cs2Config>> {
 }
 
 fn known_platform_candidates(platform_code: &str, executables: &[&str]) -> Vec<PathBuf> {
-    let folders: &[&str] = match platform_code {
-        "perfectworld" => &["perfectworldarena", "PerfectWorldArena", "完美世界竞技平台"],
-        "5e" => &["5E", "5EPlay", "5eplay", "5E对战平台"],
-        _ => &[],
-    };
     let roots: Vec<PathBuf> = [
         "ProgramFiles(x86)",
         "ProgramFiles",
@@ -147,20 +146,41 @@ fn known_platform_candidates(platform_code: &str, executables: &[&str]) -> Vec<P
     .filter_map(env::var_os)
     .map(PathBuf::from)
     .collect();
-    let mut candidates = known_platform_candidates_from_roots(folders, executables, roots.iter());
+    let mut candidates =
+        known_platform_candidates_for_code_from_roots(platform_code, executables, roots.iter());
     #[cfg(windows)]
     {
         let fallback_roots = [
             PathBuf::from(r"C:\Program Files (x86)"),
             PathBuf::from(r"C:\Program Files"),
         ];
-        candidates.extend(known_platform_candidates_from_roots(
-            folders,
+        candidates.extend(known_platform_candidates_for_code_from_roots(
+            platform_code,
             executables,
             fallback_roots.iter(),
         ));
     }
     candidates
+}
+
+fn platform_install_folders(platform_code: &str) -> &'static [&'static str] {
+    match platform_code {
+        "perfectworld" => PERFECTWORLD_FOLDERS,
+        "5e" => FIVE_E_FOLDERS,
+        _ => &[],
+    }
+}
+
+fn known_platform_candidates_for_code_from_roots<'a>(
+    platform_code: &str,
+    executables: &[&str],
+    roots: impl IntoIterator<Item = &'a PathBuf>,
+) -> Vec<PathBuf> {
+    known_platform_candidates_from_roots(
+        platform_install_folders(platform_code),
+        executables,
+        roots,
+    )
 }
 
 fn known_platform_candidates_from_roots<'a>(
@@ -223,6 +243,116 @@ fn platform_executables_below(
     candidates
 }
 
+fn allowlisted_executable(path: &Path, executables: &[&str]) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            executables
+                .iter()
+                .any(|executable| name.eq_ignore_ascii_case(executable))
+        })
+}
+
+fn registry_path(value: &str) -> Option<PathBuf> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let path = if let Some(quoted) = value.strip_prefix('"') {
+        &quoted[..quoted.find('"')?]
+    } else if let Some(index) = value
+        .as_bytes()
+        .windows(4)
+        .position(|window| window.eq_ignore_ascii_case(b".exe"))
+    {
+        &value[..index + 4]
+    } else {
+        value.split(',').next()?.trim().trim_matches('"')
+    };
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
+fn normalized_absolute_path_key(path: &Path) -> Option<String> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let normalized = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Some(
+        normalized
+            .to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_ascii_lowercase(),
+    )
+}
+
+fn registry_anchor_candidates(value: &str, executables: &[&str]) -> Vec<PathBuf> {
+    let Some(path) = registry_path(value) else {
+        return Vec::new();
+    };
+    if !path.is_absolute() {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    if allowlisted_executable(&path, executables) {
+        candidates.push(path.clone());
+    }
+    let directory = if path.extension().is_some() {
+        path.parent()
+    } else {
+        Some(path.as_path())
+    };
+    if let Some(directory) = directory {
+        candidates.extend(platform_executables_below(
+            directory,
+            executables,
+            REGISTRY_INSTALL_SCAN_DEPTH,
+        ));
+    }
+    candidates
+}
+
+fn registry_install_location_candidates(value: &str, executables: &[&str]) -> Vec<PathBuf> {
+    let value = value.trim().trim_matches('"');
+    let directory = Path::new(value);
+    if value.is_empty() || !directory.is_absolute() {
+        return Vec::new();
+    }
+    platform_executables_below(directory, executables, REGISTRY_INSTALL_SCAN_DEPTH)
+}
+
+fn registry_platform_candidates_from_fields(
+    display_icon: Option<&str>,
+    install_location: Option<&str>,
+    uninstall_string: Option<&str>,
+    quiet_uninstall_string: Option<&str>,
+    executables: &[&str],
+) -> Vec<PathBuf> {
+    let uninstall_paths = [uninstall_string, quiet_uninstall_string]
+        .into_iter()
+        .flatten()
+        .filter_map(registry_path)
+        .filter_map(|path| normalized_absolute_path_key(&path))
+        .collect::<HashSet<_>>();
+    let mut candidates = Vec::new();
+    if let Some(value) = display_icon {
+        candidates.extend(registry_anchor_candidates(value, executables));
+    }
+    if let Some(value) = install_location {
+        candidates.extend(registry_install_location_candidates(value, executables));
+    }
+    for value in [uninstall_string, quiet_uninstall_string]
+        .into_iter()
+        .flatten()
+    {
+        candidates.extend(registry_anchor_candidates(value, executables));
+    }
+    candidates.retain(|candidate| {
+        normalized_absolute_path_key(candidate).is_none_or(|path| !uninstall_paths.contains(&path))
+    });
+    candidates
+}
+
 #[cfg(windows)]
 fn registry_platform_candidates(keywords: &[&str], executables: &[&str]) -> Vec<PathBuf> {
     use winreg::{enums::*, RegKey};
@@ -260,25 +390,20 @@ fn registry_platform_candidates(keywords: &[&str], executables: &[&str]) -> Vec<
             {
                 continue;
             }
-            if let Ok(value) = entry.get_value::<String, _>("DisplayIcon") {
-                if let Some(path) = registry_executable_path(&value) {
-                    candidates.push(path);
-                }
-            }
-            if let Ok(value) = entry.get_value::<String, _>("InstallLocation") {
-                let directory = PathBuf::from(value);
-                candidates.extend(platform_executables_below(&directory, executables, 3));
-            }
+            let display_icon = entry.get_value::<String, _>("DisplayIcon").ok();
+            let install_location = entry.get_value::<String, _>("InstallLocation").ok();
+            let uninstall_string = entry.get_value::<String, _>("UninstallString").ok();
+            let quiet_uninstall_string = entry.get_value::<String, _>("QuietUninstallString").ok();
+            candidates.extend(registry_platform_candidates_from_fields(
+                display_icon.as_deref(),
+                install_location.as_deref(),
+                uninstall_string.as_deref(),
+                quiet_uninstall_string.as_deref(),
+                executables,
+            ));
         }
     }
     candidates
-}
-
-#[cfg(windows)]
-fn registry_executable_path(value: &str) -> Option<PathBuf> {
-    let path = value.split(',').next()?.trim().trim_matches('"');
-    let path = PathBuf::from(path);
-    path.is_file().then_some(path)
 }
 
 pub fn validate_dir(path: &Path) -> AppResult<()> {
@@ -453,81 +578,6 @@ pub fn launch_platform(app: &PlatformApp) -> AppResult<()> {
         .spawn()
         .map_err(|_| AppError::new("PLATFORM_LAUNCH_FAILED", "鏃犳硶鍚姩骞冲彴绋嬪簭"))?;
     Ok(())
-}
-
-pub fn launch_cs2(steam_dir: &Path) -> AppResult<()> {
-    Command::new(steam_dir.join("steam.exe"))
-        .args(["-applaunch", "730"])
-        .spawn()
-        .map_err(|_| AppError::new("CS2_LAUNCH_FAILED", "无法通过 Steam 启动 CS2"))?;
-    Ok(())
-}
-
-fn platform_process_matches(process: &sysinfo::Process, executable: &Path) -> bool {
-    let configured_name = executable.file_name().and_then(|value| value.to_str());
-    process.exe().is_some_and(|path| {
-        path == executable
-            || path
-                .file_name()
-                .zip(configured_name)
-                .is_some_and(|(actual, expected)| {
-                    actual.to_string_lossy().eq_ignore_ascii_case(expected)
-                })
-    }) || configured_name.is_some_and(|expected| {
-        process
-            .name()
-            .to_string_lossy()
-            .eq_ignore_ascii_case(expected)
-    })
-}
-
-fn platform_is_running(executable: &Path) -> bool {
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::All, true);
-    system
-        .processes()
-        .values()
-        .any(|process| platform_process_matches(process, executable))
-}
-
-fn stop_platform(executable: &Path, shutdown_timeout: u64) -> AppResult<()> {
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::All, true);
-    let processes: Vec<_> = system
-        .processes()
-        .values()
-        .filter(|process| platform_process_matches(process, executable))
-        .map(|process| process.pid())
-        .collect();
-    for pid in processes {
-        if let Some(process) = system.process(pid) {
-            if !process.kill() {
-                return Err(AppError::new(
-                    "PLATFORM_SHUTDOWN_FAILED",
-                    "鏃犳硶鍏抽棴宸茬櫥褰曠殑骞冲彴绋嬪簭",
-                ));
-            }
-        }
-    }
-    let started = Instant::now();
-    while platform_is_running(executable) {
-        if started.elapsed() > Duration::from_secs(shutdown_timeout) {
-            return Err(AppError::new(
-                "PLATFORM_SHUTDOWN_TIMEOUT",
-                "骞冲彴绋嬪簭鏈兘鍦ㄩ檺瀹氭椂闂村唴閫€鍑?",
-            ));
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
-    Ok(())
-}
-
-pub fn restart_platform(app: &PlatformApp, shutdown_timeout: u64) -> AppResult<()> {
-    let executable = PathBuf::from(&app.executable_path);
-    if platform_is_running(&executable) {
-        stop_platform(&executable, shutdown_timeout)?;
-    }
-    launch_platform(app)
 }
 
 #[cfg(windows)]
@@ -1250,6 +1300,105 @@ mod atomic_write_tests {
             candidates.contains(&executable),
             "nested 5E installation must be detected"
         );
+    }
+
+    #[test]
+    fn discovers_current_5eclient_default_installation() {
+        let root = tempfile::tempdir().expect("temporary install root");
+        let executable = root.path().join("5EClient").join("5EClient.exe");
+        fs::create_dir_all(executable.parent().expect("executable parent"))
+            .expect("5EClient installation directory");
+        fs::write(&executable, []).expect("fake 5E executable");
+
+        let roots = [root.path().to_path_buf()];
+        let candidates =
+            known_platform_candidates_for_code_from_roots("5e", FIVE_E_EXECUTABLES, roots.iter());
+
+        assert!(
+            candidates.contains(&executable),
+            "the current 5EClient default directory must be detected"
+        );
+    }
+
+    #[test]
+    fn resolves_current_5e_registry_shape_without_returning_the_uninstaller() {
+        let installation = tempfile::tempdir().expect("temporary 5E installation");
+        let executable = installation.path().join("5EClient.exe");
+        let uninstaller = installation.path().join("Uninstall 5EClient.exe");
+        let icon = installation.path().join("uninstallerIcon.ico");
+        fs::write(&executable, []).expect("fake 5E executable");
+        fs::write(&uninstaller, []).expect("fake 5E uninstaller");
+        fs::write(&icon, []).expect("fake 5E icon");
+        let uninstall_command = format!("\"{}\" /allusers", uninstaller.display());
+        let quiet_uninstall_command = format!("\"{}\" /allusers /S", uninstaller.display());
+
+        let candidates = registry_platform_candidates_from_fields(
+            Some(icon.to_string_lossy().as_ref()),
+            None,
+            Some(&uninstall_command),
+            Some(&quiet_uninstall_command),
+            FIVE_E_EXECUTABLES,
+        );
+
+        assert!(candidates.contains(&executable));
+        assert!(!candidates.contains(&uninstaller));
+        assert!(
+            candidates.iter().all(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        FIVE_E_EXECUTABLES
+                            .iter()
+                            .any(|allowed| name.eq_ignore_ascii_case(allowed))
+                    })
+            }),
+            "registry discovery must return only allow-listed launch executables"
+        );
+    }
+
+    #[test]
+    fn never_returns_the_uninstall_command_even_when_its_name_is_allowlisted() {
+        let installation = tempfile::tempdir().expect("temporary 5E installation");
+        let uninstaller = installation.path().join("5EClient.exe");
+        fs::write(&uninstaller, []).expect("fake allow-listed uninstaller");
+        let uninstall_command = format!("\"{}\" /allusers", uninstaller.display());
+
+        let candidates = registry_platform_candidates_from_fields(
+            None,
+            None,
+            Some(&uninstall_command),
+            None,
+            FIVE_E_EXECUTABLES,
+        );
+
+        assert!(!candidates.contains(&uninstaller));
+    }
+
+    #[test]
+    fn excludes_all_uninstall_paths_reintroduced_by_other_registry_fields() {
+        let installation = tempfile::tempdir().expect("temporary 5E installation");
+        let uninstaller = installation.path().join("5EClient.exe");
+        let quiet_uninstaller = installation.path().join("5EPlay.exe");
+        let executable = installation.path().join("5E.exe");
+        for path in [&uninstaller, &quiet_uninstaller, &executable] {
+            fs::write(path, []).expect("fake 5E executable");
+        }
+        let display_icon = format!("{},0", uninstaller.display());
+        let uninstall_command = format!("\"{}\" /allusers", uninstaller.display());
+        let quiet_uninstall_command = format!("\"{}\" /allusers /S", quiet_uninstaller.display());
+
+        let candidates = registry_platform_candidates_from_fields(
+            Some(&display_icon),
+            Some(installation.path().to_string_lossy().as_ref()),
+            Some(&uninstall_command),
+            Some(&quiet_uninstall_command),
+            FIVE_E_EXECUTABLES,
+        );
+
+        assert!(candidates.contains(&executable));
+        assert!(!candidates.contains(&uninstaller));
+        assert!(!candidates.contains(&quiet_uninstaller));
     }
 
     #[test]

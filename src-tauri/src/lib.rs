@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -507,31 +507,61 @@ fn current_status(state: State<AppState>) -> CurrentStatus {
     steam::status(path.as_deref())
 }
 
-struct SwitchLaunchPlan {
-    cs2_installed: bool,
-    platform_apps: Vec<PlatformApp>,
+trait SwitchWorkflowExecutor {
+    fn shutdown_steam(&mut self) -> AppResult<()>;
+    fn prepare_cs2_config(&mut self) -> AppResult<()>;
+    fn switch_steam_account(&mut self) -> AppResult<()>;
+    fn record_switch(&mut self) -> AppResult<()>;
 }
 
-fn switch_launch_plan(
-    steam_dir: &Path,
-    links: &[PlatformLink],
-    apps: &[PlatformApp],
-) -> SwitchLaunchPlan {
-    let mut selected = BTreeSet::new();
-    let platform_apps = apps
-        .iter()
-        .filter(|app| {
-            Path::new(&app.executable_path).is_file()
-                && links
-                    .iter()
-                    .any(|link| link.status != "invalid" && link.platform_code == app.platform_code)
-                && selected.insert(app.platform_code.clone())
-        })
-        .cloned()
-        .collect();
-    SwitchLaunchPlan {
-        cs2_installed: cs2::is_installed(steam_dir),
-        platform_apps,
+fn execute_switch_workflow(
+    executor: &mut impl SwitchWorkflowExecutor,
+    cs2_installed: bool,
+) -> AppResult<()> {
+    executor.shutdown_steam()?;
+    if cs2_installed {
+        executor.prepare_cs2_config()?;
+    }
+    executor.switch_steam_account()?;
+    executor.record_switch()
+}
+
+struct LocalSwitchWorkflowExecutor<'a> {
+    state: &'a AppState,
+    steam_dir: &'a Path,
+    backup_dir: &'a Path,
+    steam_id64: &'a str,
+    shutdown_timeout: u64,
+    startup_timeout: u64,
+}
+
+impl SwitchWorkflowExecutor for LocalSwitchWorkflowExecutor<'_> {
+    fn shutdown_steam(&mut self) -> AppResult<()> {
+        steam::shutdown(self.steam_dir, self.shutdown_timeout)
+    }
+
+    fn prepare_cs2_config(&mut self) -> AppResult<()> {
+        cs2::prepare_for_switch(
+            &self.state.db,
+            &self.state.data_dir,
+            self.steam_dir,
+            self.steam_id64,
+        )
+        .map(|_| ())
+    }
+
+    fn switch_steam_account(&mut self) -> AppResult<()> {
+        steam::switch(
+            self.steam_dir,
+            self.backup_dir,
+            self.steam_id64,
+            self.shutdown_timeout,
+            self.startup_timeout,
+        )
+    }
+
+    fn record_switch(&mut self) -> AppResult<()> {
+        self.state.db.mark_switched(self.steam_id64)
     }
 }
 
@@ -572,28 +602,16 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
             .and_then(|value| serde_json::from_str::<u64>(&value).ok())
             .unwrap_or(20)
             .clamp(5, 120);
-        let links = state.db.list_links(&account.id)?;
-        let mut platform_apps = state.db.list_platform_apps()?;
-        platform_apps.extend(steam::discover_platform_apps()?);
-        let launch_plan = switch_launch_plan(&dir, &links, &platform_apps);
-        steam::shutdown(&dir, shutdown_timeout)?;
-        if launch_plan.cs2_installed {
-            cs2::prepare_for_switch(&state.db, &state.data_dir, &dir, &steam_id64)?;
-        }
-        steam::switch(
-            &dir,
-            &backup,
-            &steam_id64,
+        let cs2_installed = cs2::is_installed(&dir);
+        let mut executor = LocalSwitchWorkflowExecutor {
+            state: state.inner(),
+            steam_dir: &dir,
+            backup_dir: &backup,
+            steam_id64: &steam_id64,
             shutdown_timeout,
             startup_timeout,
-        )?;
-        state.db.mark_switched(&steam_id64)?;
-        if launch_plan.cs2_installed {
-            steam::launch_cs2(&dir)?;
-        }
-        for app in launch_plan.platform_apps {
-            steam::restart_platform(&app, shutdown_timeout)?;
-        }
+        };
+        execute_switch_workflow(&mut executor, cs2_installed)?;
         Ok(account)
     })();
     state.switch_lock.store(false, Ordering::Release);
@@ -601,7 +619,7 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
     let (outcome, message, account_id, masked) = match &result {
         Ok(a) => (
             "success",
-            "Steam 已按目标账号启动".to_string(),
+            "Steam 已按目标账号重新启动；未启动 CS2 或关联平台".to_string(),
             Some(a.id.clone()),
             a.account_name.as_deref().map(mask_name),
         ),
@@ -704,7 +722,9 @@ fn clear_switch_logs(state: State<AppState>) -> AppResult<()> {
 
 #[tauri::command]
 fn save_platform_app(state: State<AppState>, app: PlatformApp) -> AppResult<()> {
-    if !["perfectworld", "5e", "faceit", "other"].contains(&app.platform_code.as_str()) {
+    if !["perfectworld", "5e", "teamspeak3", "faceit", "other"]
+        .contains(&app.platform_code.as_str())
+    {
         return Err(AppError::new("INVALID_PLATFORM", "平台类型无效"));
     }
     let executable = Path::new(&app.executable_path);
@@ -913,6 +933,40 @@ fn preview_cs2_runtime_file(state: State<AppState>, path: String) -> AppResult<S
     cs2::preview_runtime_file(&steam_path(&state)?, Path::new(&path))
 }
 
+fn resolve_teamspeak_app_with(
+    configured: &[PlatformApp],
+    discover: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PlatformApp> {
+    configured
+        .iter()
+        .find(|app| {
+            app.platform_code == "teamspeak3"
+                && Path::new(&app.executable_path).is_file()
+                && Path::new(&app.executable_path)
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        })
+        .cloned()
+        .or_else(|| {
+            let path = discover()?;
+            Some(PlatformApp {
+                platform_code: "teamspeak3".to_string(),
+                name: "TeamSpeak 3".to_string(),
+                executable_path: path.to_string_lossy().into_owned(),
+                arguments: vec![],
+                working_directory: path
+                    .parent()
+                    .map(|value| value.to_string_lossy().into_owned()),
+                prelaunch_check: false,
+            })
+        })
+}
+
+fn resolve_teamspeak_app(configured: &[PlatformApp]) -> Option<PlatformApp> {
+    resolve_teamspeak_app_with(configured, software::discover_teamspeak)
+}
+
 #[tauri::command]
 fn list_software_statuses(state: State<AppState>) -> AppResult<Vec<SoftwareStatus>> {
     let configured = state.db.list_platform_apps()?;
@@ -932,7 +986,7 @@ fn list_software_statuses(state: State<AppState>) -> AppResult<Vec<SoftwareStatu
             official_url: official_url.to_string(),
         }
     };
-    let teamspeak = software::discover_teamspeak();
+    let teamspeak = resolve_teamspeak_app(&configured);
     Ok(vec![
         platform(
             "perfectworld",
@@ -950,7 +1004,7 @@ fn list_software_statuses(state: State<AppState>) -> AppResult<Vec<SoftwareStatu
             code: "teamspeak3".to_string(),
             name: "TeamSpeak 3".to_string(),
             installed: teamspeak.is_some(),
-            executable_path: teamspeak.map(|path| path.to_string_lossy().into_owned()),
+            executable_path: teamspeak.map(|app| app.executable_path),
             download_mode: "managed".to_string(),
             official_url: software::TEAMSPEAK_DOWNLOAD_PAGE.to_string(),
         },
@@ -1037,18 +1091,9 @@ fn start_software_download(
 
 fn resolve_software_app(state: &AppState, code: &str) -> AppResult<PlatformApp> {
     if code == "teamspeak3" {
-        let path = software::discover_teamspeak()
-            .ok_or_else(|| AppError::new("SOFTWARE_NOT_INSTALLED", "未检测到 TeamSpeak 3"))?;
-        return Ok(PlatformApp {
-            platform_code: code.to_string(),
-            name: "TeamSpeak 3".to_string(),
-            executable_path: path.to_string_lossy().into_owned(),
-            arguments: vec![],
-            working_directory: path
-                .parent()
-                .map(|value| value.to_string_lossy().into_owned()),
-            prelaunch_check: false,
-        });
+        let configured = state.db.list_platform_apps()?;
+        return resolve_teamspeak_app(&configured)
+            .ok_or_else(|| AppError::new("SOFTWARE_NOT_INSTALLED", "未检测到 TeamSpeak 3"));
     }
     if !["perfectworld", "5e"].contains(&code) {
         return Err(AppError::new("SOFTWARE_NOT_SUPPORTED", "不支持启动该软件"));
@@ -1409,6 +1454,57 @@ mod tests {
     }
 
     #[test]
+    fn teamspeak_resolution_prefers_a_valid_configured_executable() {
+        let installation = tempfile::tempdir().expect("temporary TeamSpeak installation");
+        let executable = installation.path().join("custom-ts3.exe");
+        fs::write(&executable, []).expect("fake configured TeamSpeak executable");
+        let configured = PlatformApp {
+            platform_code: "teamspeak3".to_string(),
+            name: "TeamSpeak 3".to_string(),
+            executable_path: executable.to_string_lossy().into_owned(),
+            arguments: vec!["-nosingleinstance".to_string()],
+            working_directory: Some(installation.path().to_string_lossy().into_owned()),
+            prelaunch_check: true,
+        };
+        let discovery_called = Cell::new(false);
+
+        let resolved = resolve_teamspeak_app_with(std::slice::from_ref(&configured), || {
+            discovery_called.set(true);
+            None
+        })
+        .expect("configured TeamSpeak app");
+
+        assert_eq!(resolved.executable_path, configured.executable_path);
+        assert_eq!(resolved.arguments, configured.arguments);
+        assert!(!discovery_called.get());
+    }
+
+    #[test]
+    fn teamspeak_resolution_discovers_when_the_configured_path_is_invalid() {
+        let installation = tempfile::tempdir().expect("temporary TeamSpeak installation");
+        let executable = installation.path().join("ts3client_win64.exe");
+        fs::write(&executable, []).expect("fake discovered TeamSpeak executable");
+        let configured = PlatformApp {
+            platform_code: "teamspeak3".to_string(),
+            name: "TeamSpeak 3".to_string(),
+            executable_path: "missing-ts3.exe".to_string(),
+            arguments: vec![],
+            working_directory: None,
+            prelaunch_check: true,
+        };
+
+        let resolved = resolve_teamspeak_app_with(&[configured], || Some(executable.clone()))
+            .expect("discovered TeamSpeak app");
+
+        assert_eq!(resolved.executable_path, executable.to_string_lossy());
+        assert!(resolved.arguments.is_empty());
+        assert_eq!(
+            resolved.working_directory.as_deref(),
+            Some(installation.path().to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
     fn five_e_details_use_cached_data_until_the_background_worker_replaces_it() {
         let now = Utc::now();
         let expired = (now - chrono::Duration::minutes(1)).to_rfc3339();
@@ -1461,43 +1557,70 @@ mod tests {
     }
 
     #[test]
-    fn switch_plan_starts_only_valid_platforms_linked_to_target_account() {
-        let steam = tempfile::tempdir().expect("steam root");
-        let app = |code: &str| {
-            let executable = steam.path().join(format!("{code}.exe"));
-            fs::write(&executable, []).expect("fake platform executable");
-            PlatformApp {
-                platform_code: code.into(),
-                name: code.into(),
-                executable_path: executable.to_string_lossy().into_owned(),
-                arguments: vec![],
-                working_directory: None,
-                prelaunch_check: true,
-            }
-        };
-        let link = |code: &str, status: &str| PlatformLink {
-            id: format!("{code}-{status}"),
-            steam_account_id: "account-1".into(),
-            platform_code: code.into(),
-            external_id: None,
-            display_name: None,
-            profile_url: None,
-            remark: None,
-            status: status.into(),
-            last_verified_at: None,
-        };
+    fn switch_prepares_cfg_without_launching_the_game_or_platforms() {
+        let mut executor = RecordingSwitchWorkflowExecutor::default();
 
-        let plan = switch_launch_plan(
-            steam.path(),
-            &[
-                link("perfectworld", "user_confirmed"),
-                link("5e", "invalid"),
-            ],
-            &[app("perfectworld"), app("5e"), app("unlinked")],
+        execute_switch_workflow(&mut executor, true).expect("switch workflow");
+
+        assert_eq!(
+            executor.operations,
+            vec![
+                SwitchOperation::ShutdownSteam,
+                SwitchOperation::PrepareCs2Config,
+                SwitchOperation::SwitchSteamAccount,
+                SwitchOperation::RecordSwitch,
+            ]
         );
+    }
 
-        assert!(!plan.cs2_installed);
-        assert_eq!(plan.platform_apps.len(), 1);
-        assert_eq!(plan.platform_apps[0].platform_code, "perfectworld");
+    #[test]
+    fn switch_skips_cfg_preparation_when_cs2_is_not_installed() {
+        let mut executor = RecordingSwitchWorkflowExecutor::default();
+
+        execute_switch_workflow(&mut executor, false).expect("switch workflow");
+
+        assert_eq!(
+            executor.operations,
+            vec![
+                SwitchOperation::ShutdownSteam,
+                SwitchOperation::SwitchSteamAccount,
+                SwitchOperation::RecordSwitch,
+            ]
+        );
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum SwitchOperation {
+        ShutdownSteam,
+        PrepareCs2Config,
+        SwitchSteamAccount,
+        RecordSwitch,
+    }
+
+    #[derive(Default)]
+    struct RecordingSwitchWorkflowExecutor {
+        operations: Vec<SwitchOperation>,
+    }
+
+    impl SwitchWorkflowExecutor for RecordingSwitchWorkflowExecutor {
+        fn shutdown_steam(&mut self) -> AppResult<()> {
+            self.operations.push(SwitchOperation::ShutdownSteam);
+            Ok(())
+        }
+
+        fn prepare_cs2_config(&mut self) -> AppResult<()> {
+            self.operations.push(SwitchOperation::PrepareCs2Config);
+            Ok(())
+        }
+
+        fn switch_steam_account(&mut self) -> AppResult<()> {
+            self.operations.push(SwitchOperation::SwitchSteamAccount);
+            Ok(())
+        }
+
+        fn record_switch(&mut self) -> AppResult<()> {
+            self.operations.push(SwitchOperation::RecordSwitch);
+            Ok(())
+        }
     }
 }

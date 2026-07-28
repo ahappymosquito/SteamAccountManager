@@ -216,7 +216,7 @@ export default function App() {
       await flushCfgDraft();
       await api.switchAccount(switching.steamId64);
       await load();
-      notify("success", "启动参数与 CFG 已验证，Steam 账号切换完成");
+      notify("success", "Steam 账号切换完成；CS2 与关联平台未自动启动");
     } catch (error) {
       notify("error", errorMessage(error));
       throw error;
