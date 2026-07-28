@@ -1,8 +1,8 @@
 //! SQLite migrations and transactional repositories for application data.
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, LocalSteamAccount, PlatformApp,
-    PlatformLink, PlatformLinkInput, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption,
+    Account, AccountCfgAssignment, CfgProfile, LocalSteamAccount, PlatformApp, PlatformLink,
+    PlatformLinkInput, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -611,34 +611,19 @@ impl Database {
     }
 
     pub fn save_cfg_profile(&self, id: &str, name: &str, content: &str) -> AppResult<()> {
-        let mut conn = self.0.lock();
-        let tx = conn.transaction()?;
-        let previous: Option<String> = tx
-            .query_row(
-                "SELECT content FROM cfg_profiles WHERE id=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let previous = previous
-            .ok_or_else(|| AppError::new("CFG_PROFILE_NOT_FOUND", "找不到该 CS2 cfg 方案"))?;
         let now = Utc::now().to_rfc3339();
-        if previous != content {
-            tx.execute(
-                "INSERT INTO cfg_profile_versions(id,profile_id,content,created_at) VALUES(?1,?2,?3,?4)",
-                params![Uuid::new_v4().to_string(), id, previous, now],
-            )?;
-            tx.execute(
-                "DELETE FROM cfg_profile_versions WHERE profile_id=?1 AND id NOT IN (SELECT id FROM cfg_profile_versions WHERE profile_id=?1 ORDER BY created_at DESC LIMIT 10)",
-                [id],
-            )?;
-        }
-        tx.execute(
+        let changed = self.0.lock().execute(
             "UPDATE cfg_profiles SET name=?1,content=?2,updated_at=?3 WHERE id=?4",
             params![name, content, now, id],
         )?;
-        tx.commit()?;
-        Ok(())
+        if changed == 0 {
+            Err(AppError::new(
+                "CFG_PROFILE_NOT_FOUND",
+                "找不到该 CS2 cfg 方案",
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn delete_cfg_profile(&self, id: &str) -> AppResult<()> {
@@ -770,36 +755,6 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()?)
-    }
-
-    pub fn list_cfg_versions(&self, profile_id: &str) -> AppResult<Vec<CfgProfileVersion>> {
-        let conn = self.0.lock();
-        let mut statement = conn.prepare(
-            "SELECT id,profile_id,created_at FROM cfg_profile_versions WHERE profile_id=?1 ORDER BY created_at DESC",
-        )?;
-        let versions = statement
-            .query_map([profile_id], |row| {
-                Ok(CfgProfileVersion {
-                    id: row.get(0)?,
-                    profile_id: row.get(1)?,
-                    created_at: row.get(2)?,
-                })
-            })?
-            .collect::<Result<_, _>>()?;
-        Ok(versions)
-    }
-
-    pub fn restore_cfg_version(&self, profile_id: &str, version_id: &str) -> AppResult<String> {
-        let conn = self.0.lock();
-        let content: String = conn
-            .query_row(
-                "SELECT content FROM cfg_profile_versions WHERE id=?1 AND profile_id=?2",
-                params![version_id, profile_id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| AppError::new("CFG_VERSION_NOT_FOUND", "找不到该历史版本"))?;
-        Ok(content)
     }
 }
 
@@ -1022,6 +977,41 @@ mod tests {
                 .expect_err("last profile cannot be deleted")
                 .code,
             "CFG_LAST_PROFILE"
+        );
+    }
+
+    #[test]
+    fn cfg_save_updates_profile_without_creating_history_snapshots() {
+        let temp = tempfile::tempdir().expect("temp");
+        let db = Database::open(&temp.path().join("cfg-save.db")).expect("db");
+        let profile = db.ensure_active_cfg_profile().expect("default profile");
+        db.0.lock()
+            .execute(
+                "INSERT INTO cfg_profile_versions(id,profile_id,content,created_at) VALUES('legacy-version',?1,'old content','2026-07-28T00:00:00Z')",
+                [&profile.id],
+            )
+            .expect("legacy history");
+
+        db.save_cfg_profile(&profile.id, "Updated", "fps_max 400")
+            .expect("save profile");
+
+        let saved = db.active_cfg_profile().expect("saved profile");
+        assert_eq!(saved.name, "Updated");
+        assert_eq!(saved.content, "fps_max 400");
+        let history_count: i64 =
+            db.0.lock()
+                .query_row(
+                    "SELECT COUNT(*) FROM cfg_profile_versions WHERE profile_id=?1",
+                    [&profile.id],
+                    |row| row.get(0),
+                )
+                .expect("history count");
+        assert_eq!(history_count, 1);
+        assert_eq!(
+            db.save_cfg_profile("missing", "Missing", "")
+                .expect_err("missing profile")
+                .code,
+            "CFG_PROFILE_NOT_FOUND"
         );
     }
 }

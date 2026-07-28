@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, Cs2Config, Cs2RuntimeFile, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption, UpdateInfo, UpdateProgress } from "./types";
+import type { Account, AccountCfgAssignment, CfgProfile, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption, UpdateInfo, UpdateProgress } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -41,10 +41,6 @@ export const api = {
   deleteCfgProfile: (id:string) => invoke<void>("delete_cfg_profile",{id}),
   cfgAssignments: () => invoke<AccountCfgAssignment[]>("list_cfg_assignments"),
   assignCfgProfile: (steamAccountId:string,profileId?:string) => invoke<void>("assign_cfg_profile",{steamAccountId,profileId:profileId||null}),
-  cfgVersions: (profileId:string) => invoke<CfgProfileVersion[]>("list_cfg_versions",{profileId}),
-  restoreCfgVersion: (profileId:string,versionId:string) => invoke<string>("restore_cfg_version",{profileId,versionId}),
-  cs2RuntimeFiles: () => invoke<Cs2RuntimeFile[]>("list_cs2_runtime_files"),
-  previewCs2RuntimeFile: (path:string) => invoke<string>("preview_cs2_runtime_file",{path}),
   softwareStatuses: () => invoke<SoftwareStatus[]>("list_software_statuses"),
   downloadProgress: () => invoke<DownloadProgress[]>("list_download_progress"),
   openOfficialUrl: (code:string) => invoke<void>("open_official_url",{code}),

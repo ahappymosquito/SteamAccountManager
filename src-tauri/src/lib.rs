@@ -906,33 +906,6 @@ fn list_cfg_assignments(state: State<AppState>) -> AppResult<Vec<AccountCfgAssig
     state.db.list_cfg_assignments()
 }
 
-#[tauri::command]
-fn list_cfg_versions(
-    state: State<AppState>,
-    profile_id: String,
-) -> AppResult<Vec<CfgProfileVersion>> {
-    state.db.list_cfg_versions(&profile_id)
-}
-
-#[tauri::command]
-fn restore_cfg_version(
-    state: State<AppState>,
-    profile_id: String,
-    version_id: String,
-) -> AppResult<String> {
-    state.db.restore_cfg_version(&profile_id, &version_id)
-}
-
-#[tauri::command]
-fn list_cs2_runtime_files(state: State<AppState>) -> AppResult<Vec<Cs2RuntimeFile>> {
-    cs2::list_runtime_files(&steam_path(&state)?)
-}
-
-#[tauri::command]
-fn preview_cs2_runtime_file(state: State<AppState>, path: String) -> AppResult<String> {
-    cs2::preview_runtime_file(&steam_path(&state)?, Path::new(&path))
-}
-
 fn resolve_teamspeak_app_with(
     configured: &[PlatformApp],
     discover: impl FnOnce() -> Option<PathBuf>,
@@ -1384,10 +1357,6 @@ pub fn run() {
             delete_cfg_profile,
             assign_cfg_profile,
             list_cfg_assignments,
-            list_cfg_versions,
-            restore_cfg_version,
-            list_cs2_runtime_files,
-            preview_cs2_runtime_file,
             list_software_statuses,
             list_download_progress,
             open_official_url,

@@ -1,17 +1,14 @@
-/** CS2 CFG workbench with lossless visual editing, source editing, export, and history. */
+/** CS2 CFG workbench for profile management, lossless visual editing, and source editing. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
-  Clock3,
   Code2,
   Copy,
   Download,
-  FileCode2,
   FolderOpen,
-  History,
+  Pencil,
   Plus,
-  RotateCcw,
   SlidersHorizontal,
   Trash2,
   Upload,
@@ -49,18 +46,11 @@ import {
   readCrosshair,
 } from "../lib/crosshair";
 import { api } from "../lib/api";
-import type {
-  AppError,
-  CfgProfile,
-  CfgProfileVersion,
-  Cs2RuntimeFile,
-} from "../lib/types";
+import type { AppError, CfgProfile } from "../lib/types";
 
 const errorMessage = (error: unknown) =>
   (error as AppError)?.message || "操作失败";
 
-type Preview = { path: string; name: string; content: string };
-type ToolTab = "history" | "runtime";
 type WorkspaceView = "visual" | "source";
 
 const quoted = (value: string) =>
@@ -242,11 +232,9 @@ export function Cs2Page({
 }) {
   const workspace = useCfgWorkspace();
   const [profiles, setProfiles] = useState<CfgProfile[]>([]);
-  const [versions, setVersions] = useState<CfgProfileVersion[]>([]);
-  const [runtimeFiles, setRuntimeFiles] = useState<Cs2RuntimeFile[]>([]);
-  const [preview, setPreview] = useState<Preview>();
-  const [toolTab, setToolTab] = useState<ToolTab>("history");
   const [view, setView] = useState<WorkspaceView>("visual");
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
   const [section, setSection] = useState<CfgSectionId>("crosshair");
   const [background, setBackground] = useState<CrosshairBackground>("dark");
   const [definitions, setDefinitions] = useState(commandDefinitions);
@@ -270,14 +258,12 @@ export function Cs2Page({
     const items = await api.cfgProfiles();
     setProfiles(items);
     workspace.load(active);
-    setPreview(undefined);
-    setVersions(await api.cfgVersions(active.id).catch(() => []));
+    setRenaming(false);
   };
 
   useEffect(() => {
     void Promise.all([
       refreshProfiles(),
-      api.cs2RuntimeFiles().then(setRuntimeFiles).catch(() => setRuntimeFiles([])),
       api.settings().then((settings) => {
         const stored = settings.cfg_command_definitions;
         if (!Array.isArray(stored)) return;
@@ -302,10 +288,10 @@ export function Cs2Page({
   const lineNumbers = useMemo(
     () =>
       Array.from(
-        { length: (preview?.content ?? draft?.content ?? "").split("\n").length },
+        { length: (draft?.content ?? "").split("\n").length },
         (_, index) => index + 1,
       ).join("\n"),
-    [draft?.content, preview?.content],
+    [draft?.content],
   );
 
   const mutateContent = (content: string) => workspace.edit({ content });
@@ -316,8 +302,7 @@ export function Cs2Page({
       await flushCfgDraft();
       const selected = await api.setActiveCfgProfile(id);
       workspace.load(selected);
-      setPreview(undefined);
-      setVersions(await api.cfgVersions(id).catch(() => []));
+      setRenaming(false);
     } catch (error) {
       notify("error", errorMessage(error));
     }
@@ -333,7 +318,7 @@ export function Cs2Page({
       );
       setProfiles((items) => [...items, profile]);
       workspace.load(profile);
-      setVersions([]);
+      setRenaming(false);
       notify("success", "已创建并启用 CFG");
     } catch (error) {
       notify("error", errorMessage(error));
@@ -352,7 +337,7 @@ export function Cs2Page({
       const profile = await api.importCfgProfile(path);
       setProfiles((items) => [...items, profile]);
       workspace.load(profile);
-      setVersions([]);
+      setRenaming(false);
       notify("success", `已导入并启用 ${profile.fileName}`);
     } catch (error) {
       notify("error", errorMessage(error));
@@ -430,30 +415,22 @@ export function Cs2Page({
     }
   };
 
-  const restore = async (version: CfgProfileVersion) => {
-    if (!draft || !confirm("恢复该历史内容？当前内容会先进入历史。"))
-      return;
-    try {
-      workspace.edit({
-        content: await api.restoreCfgVersion(draft.id, version.id),
-      });
-      notify("success", "历史内容已载入，正在保存");
-    } catch (error) {
-      notify("error", errorMessage(error));
-    }
+  const startRename = () => {
+    if (!draft) return;
+    setRenameValue(draft.name);
+    setRenaming(true);
   };
 
-  const showPreview = async (file: Cs2RuntimeFile) => {
-    try {
-      setPreview({
-        path: file.path,
-        name: file.name,
-        content: await api.previewCs2RuntimeFile(file.path),
-      });
-      setView("source");
-    } catch (error) {
-      notify("error", errorMessage(error));
+  const commitRename = () => {
+    if (!draft) return;
+    const name = renameValue.trim();
+    if (name && name !== draft.name) {
+      workspace.edit({ name });
+      setProfiles((items) =>
+        items.map((item) => (item.id === draft.id ? { ...item, name } : item)),
+      );
     }
+    setRenaming(false);
   };
 
   const copyText = async (value: string, message: string) => {
@@ -465,7 +442,7 @@ export function Cs2Page({
     }
   };
 
-  const editorValue = preview?.content ?? draft?.content ?? "";
+  const editorValue = draft?.content ?? "";
   const saveLabel = workspace.saving
     ? "正在保存"
     : dirty
@@ -493,22 +470,54 @@ export function Cs2Page({
       <header className="page-heading cfg-heading">
         <div>
           <h1>CS2 CFG 工作台</h1>
-          <p>可视化编辑当前方案；不会修改游戏实时文件，也不会启动游戏。</p>
+          <p>可视化或源码编辑 CFG，修改会自动保存；不会写入游戏实时文件，也不会启动游戏。</p>
         </div>
       </header>
 
       <div className="cfg-commandbar">
-        <select
-          aria-label="当前 CFG"
-          value={draft?.id ?? ""}
-          onChange={(event) => void selectProfile(event.target.value)}
-        >
-          {profiles.map((profile) => (
-            <option value={profile.id} key={profile.id}>
-              {profile.name} · {profile.fileName}
-            </option>
-          ))}
-        </select>
+        <div className="cfg-profile-control">
+          {renaming ? (
+            <input
+              autoFocus
+              aria-label="方案名称"
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") setRenaming(false);
+              }}
+            />
+          ) : (
+            <select
+              aria-label="当前 CFG"
+              value={draft?.id ?? ""}
+              onChange={(event) => void selectProfile(event.target.value)}
+            >
+              {profiles.map((profile) => (
+                <option value={profile.id} key={profile.id}>
+                  {profile.name} · {profile.fileName}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            className="icon-button"
+            aria-label="重命名 CFG"
+            disabled={!draft || renaming}
+            onClick={startRename}
+          >
+            <Pencil />
+          </button>
+          <button
+            className="icon-button danger"
+            aria-label="删除 CFG"
+            disabled={profiles.length <= 1}
+            onClick={() => void removeProfile()}
+          >
+            <Trash2 />
+          </button>
+        </div>
         <button className="button secondary" onClick={() => void importFile()}>
           <FolderOpen /><span>导入 CFG</span>
         </button>
@@ -531,7 +540,6 @@ export function Cs2Page({
               role="tab"
               aria-selected={view === "visual"}
               className={view === "visual" ? "active" : ""}
-              disabled={Boolean(preview)}
               onClick={() => setView("visual")}
             >
               <SlidersHorizontal />可视化配置
@@ -545,34 +553,9 @@ export function Cs2Page({
               <Code2 />CFG 源码
             </button>
           </div>
-          <div className="editor-file-name">
-            <FileCode2 />{preview ? preview.name : draft?.fileName}
-            {preview && <span>只读</span>}
-          </div>
-          {preview ? (
-            <button onClick={() => setPreview(undefined)}>返回当前 CFG</button>
-          ) : (
-            draft && (
-              <>
-                <input
-                  aria-label="方案名称"
-                  value={draft.name}
-                  onChange={(event) => workspace.edit({ name: event.target.value })}
-                />
-                <button
-                  className="icon-button danger"
-                  aria-label="删除 CFG"
-                  disabled={profiles.length <= 1}
-                  onClick={() => void removeProfile()}
-                >
-                  <Trash2 />
-                </button>
-              </>
-            )
-          )}
         </div>
 
-        {view === "visual" && !preview ? (
+        {view === "visual" ? (
           <div className="cfg-visual-layout">
             <nav className="cfg-section-nav" aria-label="配置分区">
               {sectionOrder.map((id) => (
@@ -588,10 +571,7 @@ export function Cs2Page({
             </nav>
             <div className="cfg-settings-pane">
               <header>
-                <div>
-                  <h2>{sectionLabels[section]}</h2>
-                  <p>修改会精准写回对应命令，并沿用 500ms 自动保存。</p>
-                </div>
+                <h2>{sectionLabels[section]}</h2>
                 <div className="cfg-metadata-actions">
                   <button
                     className="button secondary"
@@ -744,9 +724,8 @@ export function Cs2Page({
                 {lineNumbers}
               </pre>
               <textarea
-                aria-label={preview ? "运行文件只读预览" : "CFG 编辑器"}
+                aria-label="CFG 编辑器"
                 value={editorValue}
-                readOnly={Boolean(preview)}
                 spellCheck={false}
                 onChange={(event) => workspace.edit({ content: event.target.value })}
                 onClick={(event) => {
@@ -767,7 +746,7 @@ export function Cs2Page({
               />
             </div>
             <footer className="editor-statusbar">
-              <span>{preview ? "只读预览" : saveLabel}</span>
+              <span>{saveLabel}</span>
               <span className="spacer" />
               <span>Ln {cursor.line}, Col {cursor.column}</span>
               <span>UTF-8</span><span>CFG</span>
@@ -775,56 +754,6 @@ export function Cs2Page({
           </>
         )}
       </section>
-
-      <details className="cfg-tools">
-        <summary>历史版本与运行文件</summary>
-        <div className="cfg-tool-tabs">
-          <button
-            className={toolTab === "history" ? "active" : ""}
-            onClick={() => setToolTab("history")}
-          >
-            <History />历史版本
-          </button>
-          <button
-            className={toolTab === "runtime" ? "active" : ""}
-            onClick={() => setToolTab("runtime")}
-          >
-            <FolderOpen />运行文件
-          </button>
-        </div>
-        <div className="cfg-tool-content">
-          {toolTab === "history" &&
-            (versions.length ? (
-              versions.map((version) => (
-                <button
-                  className="history-row"
-                  key={version.id}
-                  onClick={() => void restore(version)}
-                >
-                  <Clock3 />
-                  {new Date(version.createdAt).toLocaleString("zh-CN")}
-                  <RotateCcw />
-                </button>
-              ))
-            ) : (
-              <p className="muted-copy">修改后自动保留最近 10 个版本。</p>
-            ))}
-          {toolTab === "runtime" &&
-            (runtimeFiles.length ? (
-              <div className="runtime-file-list">
-                {runtimeFiles.map((file) => (
-                  <button key={file.path} onClick={() => void showPreview(file)}>
-                    <span>账号 …{file.steamId64.slice(-6)}</span>
-                    <strong>{file.name}</strong>
-                    <small>{Math.max(1, Math.ceil(file.size / 1024))} KB</small>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="muted-copy">未检测到 CS2 运行配置文件。</p>
-            ))}
-        </div>
-      </details>
     </section>
   );
 }

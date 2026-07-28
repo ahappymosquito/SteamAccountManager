@@ -1,9 +1,8 @@
-//! Managed CS2 cfg profiles, safe runtime previews, and switch-time deployment.
+//! Managed CS2 cfg profiles and safe switch-time deployment.
 use crate::database::Database;
 use crate::error::{AppError, AppResult};
-use crate::models::{CfgProfile, Cs2RuntimeFile};
+use crate::models::CfgProfile;
 use crate::steam;
-use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
@@ -12,7 +11,7 @@ use std::{
 };
 
 const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
-const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 pub fn validate_cfg_file_name(file_name: &str) -> AppResult<String> {
     let trimmed = file_name.trim();
@@ -103,7 +102,7 @@ pub fn read_definition_file(path: &Path) -> AppResult<String> {
         || !["json", "jsonc"]
             .iter()
             .any(|allowed| extension.eq_ignore_ascii_case(allowed))
-        || fs::metadata(path)?.len() > MAX_PREVIEW_BYTES
+        || fs::metadata(path)?.len() > MAX_TEXT_FILE_BYTES
     {
         return Err(AppError::new(
             "CFG_DEFINITION_IMPORT_INVALID",
@@ -267,82 +266,6 @@ pub fn prepare_for_switch(
     }
     db.mark_cfg_applied(steam_id64, &file_name)?;
     Ok(Some(file_name))
-}
-
-pub fn list_runtime_files(steam_dir: &Path) -> AppResult<Vec<Cs2RuntimeFile>> {
-    let mut files = Vec::new();
-    for config in steam::discover_cs2_configs(steam_dir)? {
-        for entry in fs::read_dir(&config.path)?.filter_map(Result::ok) {
-            let path = entry.path();
-            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let extension = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default();
-            if !["cfg", "vcfg", "txt"]
-                .iter()
-                .any(|allowed| extension.eq_ignore_ascii_case(allowed))
-            {
-                continue;
-            }
-            let metadata = entry.metadata()?;
-            let modified_at = metadata
-                .modified()
-                .ok()
-                .map(DateTime::<Utc>::from)
-                .map(|value| value.to_rfc3339());
-            files.push(Cs2RuntimeFile {
-                steam_id64: config.steam_id64.clone(),
-                path: path.to_string_lossy().into_owned(),
-                name,
-                size: metadata.len(),
-                modified_at,
-                editable: extension.eq_ignore_ascii_case("cfg"),
-            });
-        }
-    }
-    files.sort_by(|left, right| {
-        left.steam_id64
-            .cmp(&right.steam_id64)
-            .then(left.name.cmp(&right.name))
-    });
-    Ok(files)
-}
-
-pub fn preview_runtime_file(steam_dir: &Path, requested: &Path) -> AppResult<String> {
-    let root = steam_dir.join("userdata").canonicalize()?;
-    let path = requested.canonicalize()?;
-    if !path.starts_with(&root) || !path.is_file() {
-        return Err(AppError::new(
-            "CFG_PREVIEW_PATH_INVALID",
-            "只能预览 Steam userdata 中的 CS2 配置文件",
-        ));
-    }
-    let metadata = fs::metadata(&path)?;
-    if metadata.len() > MAX_PREVIEW_BYTES {
-        return Err(AppError::new(
-            "CFG_PREVIEW_TOO_LARGE",
-            "配置文件超过 2 MB，无法预览",
-        ));
-    }
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    if !["cfg", "vcfg", "txt"]
-        .iter()
-        .any(|allowed| extension.eq_ignore_ascii_case(allowed))
-    {
-        return Err(AppError::new(
-            "CFG_PREVIEW_TYPE_INVALID",
-            "该文件类型不支持预览",
-        ));
-    }
-    fs::read_to_string(path)
-        .map_err(|_| AppError::new("CFG_PREVIEW_ENCODING", "配置文件不是有效 UTF-8 文本"))
 }
 
 #[cfg(test)]

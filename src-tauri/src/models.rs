@@ -231,31 +231,12 @@ pub struct CfgProfile {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct CfgProfileVersion {
-    pub id: String,
-    pub profile_id: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct AccountCfgAssignment {
     pub steam_account_id: String,
     pub steam_id64: String,
     pub profile_id: String,
     pub profile_name: String,
     pub file_name: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Cs2RuntimeFile {
-    pub steam_id64: String,
-    pub path: String,
-    pub name: String,
-    pub size: u64,
-    pub modified_at: Option<String>,
-    pub editable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
