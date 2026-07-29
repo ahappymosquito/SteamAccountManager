@@ -168,6 +168,7 @@ pub struct PlatformCredentialStatus {
 pub struct CurrentStatus {
     pub kind: String,
     pub account_name: Option<String>,
+    pub persona_name: Option<String>,
     pub steam_id64: Option<String>,
     pub steam_running: bool,
 }
@@ -187,6 +188,7 @@ pub struct SwitchResult {
     pub success: bool,
     pub stage: String,
     pub message: String,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

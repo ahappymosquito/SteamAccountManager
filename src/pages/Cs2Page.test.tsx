@@ -130,7 +130,11 @@ describe("Cs2Page", () => {
     dialogMock.save.mockResolvedValue("C:\\exports\\cs2-cfg-parameters.jsonc");
     render(<Cs2Page notify={vi.fn()} />);
     await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
-    fireEvent.click(screen.getByRole("button", { name: "导出参数" }));
+    const exportLibrary = screen.getByRole("button", {
+      name: "导出 CFG 参数库",
+    });
+    expect(exportLibrary.closest(".editor-tabbar")).toBeInTheDocument();
+    fireEvent.click(exportLibrary);
     await waitFor(() =>
       expect(apiMock.writeCfgDefinitionFile).toHaveBeenCalled(),
     );
@@ -153,7 +157,14 @@ describe("Cs2Page", () => {
     }`);
     render(<Cs2Page notify={vi.fn()} />);
     await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
-    fireEvent.click(screen.getByRole("button", { name: "导入参数" }));
+    const importLibrary = screen.getByRole("button", {
+      name: "导入 CFG 参数库",
+    });
+    expect(importLibrary.closest(".editor-tabbar")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /添加命令到准星/ }),
+    ).toHaveAttribute("title", "添加到当前分区：准星");
+    fireEvent.click(importLibrary);
     await waitFor(() =>
       expect(apiMock.setSetting).toHaveBeenCalledWith(
         "cfg_command_definitions",

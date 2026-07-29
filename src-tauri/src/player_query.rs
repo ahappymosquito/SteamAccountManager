@@ -35,6 +35,12 @@ struct ResolvedFiveEPlayer {
     uuid: String,
 }
 
+#[derive(Debug, PartialEq)]
+struct FiveELadderSummary {
+    rank_name: String,
+    elo: Option<f64>,
+}
+
 #[derive(Clone)]
 pub struct PlayerQuery {
     client: Client,
@@ -138,19 +144,9 @@ impl PlayerQuery {
             }
         }
 
-        let newest = summaries.first();
-        let elo_before = newest.and_then(|value| {
-            value_number(
-                value
-                    .get("level_info")
-                    .and_then(|level| level.get("origin_elo")),
-            )
-        });
-        let elo_change = newest.and_then(|value| value_number(value.get("change_elo")));
-        let elo = elo_before.map(|before| before + elo_change.unwrap_or(0.0));
-        let rank_name = newest
-            .and_then(|value| value.get("level_info"))
-            .and_then(|level| value_text(level.get("level_name")));
+        let ladder = five_e_ladder_summary(&summaries);
+        let elo = ladder.as_ref().and_then(|summary| summary.elo);
+        let rank_name = ladder.map(|summary| summary.rank_name);
 
         let mut warnings = Vec::new();
         if token_expired {
@@ -532,10 +528,8 @@ impl PlayerQuery {
         };
         let fallback = supplement.as_ref();
 
-        let elo_before = summary
-            .get("level_info")
-            .and_then(|level| value_number(level.get("origin_elo")));
-        let elo_change = value_number(summary.get("change_elo"));
+        let elo_before = five_e_number(summary, "origin_elo");
+        let elo_change = five_e_number(summary, "change_elo");
         let rounds = value_number(summary.get("round_total")).or_else(|| {
             value_number(
                 detail_data
@@ -916,6 +910,26 @@ fn match_list(value: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+fn five_e_number(summary: &Value, key: &str) -> Option<f64> {
+    value_number(summary.get(key)).or_else(|| {
+        summary
+            .get("level_info")
+            .and_then(|level| value_number(level.get(key)))
+    })
+}
+
+fn five_e_ladder_summary(summaries: &[Value]) -> Option<FiveELadderSummary> {
+    summaries.iter().find_map(|summary| {
+        let rank_name = summary
+            .get("level_info")
+            .and_then(|level| value_text(level.get("level_name")))
+            .filter(|value| !value.trim().is_empty())?;
+        let elo = five_e_number(summary, "origin_elo")
+            .map(|before| before + five_e_number(summary, "change_elo").unwrap_or(0.0));
+        Some(FiveELadderSummary { rank_name, elo })
+    })
+}
+
 fn recursive_text(value: &Value, keys: &[&str]) -> Option<String> {
     match value {
         Value::Array(items) => items.iter().find_map(|item| recursive_text(item, keys)),
@@ -1011,8 +1025,8 @@ fn weighted_average(
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate, domain_from_player_url, find_player, match_list, select_search_player,
-        value_bool, PlayerQuery,
+        aggregate, domain_from_player_url, find_player, five_e_ladder_summary, match_list,
+        select_search_player, value_bool, PlayerQuery,
     };
     use crate::models::PlayerMatch;
     use reqwest::{blocking::Client, Url};
@@ -1123,6 +1137,29 @@ mod tests {
         assert_eq!(match_list(&payload)[0]["match_id"], 42);
         assert_eq!(value_bool(Some(&json!("1"))), Some(true));
         assert_eq!(value_bool(Some(&json!(0))), Some(false));
+    }
+
+    #[test]
+    fn five_e_ladder_skips_unranked_modes_and_reads_root_elo_fields() {
+        let summaries = vec![
+            json!({
+                "game_type": "battle1v1",
+                "origin_elo": "2310.1",
+                "change_elo": "0",
+                "level_info": {"level_name": "", "origin_elo": ""}
+            }),
+            json!({
+                "game_type": "nspug_c",
+                "origin_elo": "2379.34",
+                "change_elo": "21.76",
+                "level_info": {"level_name": "S", "origin_elo": "2379.34"}
+            }),
+        ];
+
+        let ladder = five_e_ladder_summary(&summaries).expect("ranked ladder summary");
+
+        assert_eq!(ladder.rank_name, "S");
+        assert!((ladder.elo.expect("ELO") - 2401.1).abs() < 0.001);
     }
 
     #[test]

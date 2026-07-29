@@ -512,18 +512,30 @@ trait SwitchWorkflowExecutor {
     fn prepare_cs2_config(&mut self) -> AppResult<()>;
     fn switch_steam_account(&mut self) -> AppResult<()>;
     fn record_switch(&mut self) -> AppResult<()>;
+    fn restart_five_e(&mut self) -> AppResult<()>;
 }
 
 fn execute_switch_workflow(
     executor: &mut impl SwitchWorkflowExecutor,
     cs2_installed: bool,
-) -> AppResult<()> {
+    restart_five_e: bool,
+) -> AppResult<Vec<String>> {
     executor.shutdown_steam()?;
     if cs2_installed {
         executor.prepare_cs2_config()?;
     }
     executor.switch_steam_account()?;
-    executor.record_switch()
+    executor.record_switch()?;
+    let mut warnings = Vec::new();
+    if restart_five_e {
+        if let Err(error) = executor.restart_five_e() {
+            warnings.push(format!(
+                "Steam 账号已切换，但 5E 未能启动或重启：{}",
+                error.message
+            ));
+        }
+    }
+    Ok(warnings)
 }
 
 struct LocalSwitchWorkflowExecutor<'a> {
@@ -563,6 +575,11 @@ impl SwitchWorkflowExecutor for LocalSwitchWorkflowExecutor<'_> {
     fn record_switch(&mut self) -> AppResult<()> {
         self.state.db.mark_switched(self.steam_id64)
     }
+
+    fn restart_five_e(&mut self) -> AppResult<()> {
+        let app = resolve_software_app(self.state, "5e")?;
+        steam::restart_five_e(&app, Duration::from_secs(10))
+    }
 }
 
 #[tauri::command]
@@ -580,7 +597,7 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
     }
     let started = Utc::now().to_rfc3339();
     let id = Uuid::new_v4().to_string();
-    let result = (|| -> AppResult<Account> {
+    let result = (|| -> AppResult<(Account, Vec<String>)> {
         let account = state
             .db
             .list_accounts()?
@@ -611,25 +628,41 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
             shutdown_timeout,
             startup_timeout,
         };
-        execute_switch_workflow(&mut executor, cs2_installed)?;
-        Ok(account)
+        let restart_five_e = account.platform_codes.iter().any(|code| code == "5e");
+        let warnings = execute_switch_workflow(&mut executor, cs2_installed, restart_five_e)?;
+        Ok((account, warnings))
     })();
     state.switch_lock.store(false, Ordering::Release);
     let finished = Utc::now().to_rfc3339();
     let (outcome, message, account_id, masked) = match &result {
-        Ok(a) => (
+        Ok((account, warnings)) if warnings.is_empty() => (
             "success",
-            "Steam 已按目标账号重新启动；未启动 CS2 或关联平台".to_string(),
-            Some(a.id.clone()),
-            a.account_name.as_deref().map(mask_name),
+            if account.platform_codes.iter().any(|code| code == "5e") {
+                "Steam 已按目标账号重新启动，5E 已启动或重启".to_string()
+            } else {
+                "Steam 已按目标账号重新启动；未启动 CS2".to_string()
+            },
+            Some(account.id.clone()),
+            account.account_name.as_deref().map(mask_name),
+        ),
+        Ok((account, warnings)) => (
+            "success_with_warning",
+            warnings.join("；"),
+            Some(account.id.clone()),
+            account.account_name.as_deref().map(mask_name),
         ),
         Err(e) => ("failed", e.message.clone(), None, None),
     };
-    state.db.0.lock().execute("INSERT INTO switch_logs(id,steam_account_id,account_name,started_at,finished_at,result,error_message) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,account_id,masked,started,finished,outcome,if outcome=="failed"{Some(message.clone())}else{None}])?;
-    result.map(|_| SwitchResult {
+    state.db.0.lock().execute("INSERT INTO switch_logs(id,steam_account_id,account_name,started_at,finished_at,result,error_message) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,account_id,masked,started,finished,outcome,if outcome=="failed" || outcome=="success_with_warning"{Some(message.clone())}else{None}])?;
+    result.map(|(_, warnings)| SwitchResult {
         success: true,
-        stage: "completed".into(),
+        stage: if warnings.is_empty() {
+            "completed".into()
+        } else {
+            "completed_with_warning".into()
+        },
         message,
+        warnings,
     })
 }
 
@@ -1529,8 +1562,10 @@ mod tests {
     fn switch_prepares_cfg_without_launching_the_game_or_platforms() {
         let mut executor = RecordingSwitchWorkflowExecutor::default();
 
-        execute_switch_workflow(&mut executor, true).expect("switch workflow");
+        let warnings =
+            execute_switch_workflow(&mut executor, true, false).expect("switch workflow");
 
+        assert!(warnings.is_empty());
         assert_eq!(
             executor.operations,
             vec![
@@ -1546,7 +1581,7 @@ mod tests {
     fn switch_skips_cfg_preparation_when_cs2_is_not_installed() {
         let mut executor = RecordingSwitchWorkflowExecutor::default();
 
-        execute_switch_workflow(&mut executor, false).expect("switch workflow");
+        execute_switch_workflow(&mut executor, false, false).expect("switch workflow");
 
         assert_eq!(
             executor.operations,
@@ -1558,17 +1593,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn switch_restarts_five_e_only_for_linked_accounts() {
+        let mut executor = RecordingSwitchWorkflowExecutor::default();
+
+        let warnings =
+            execute_switch_workflow(&mut executor, false, true).expect("switch workflow");
+
+        assert!(warnings.is_empty());
+        assert_eq!(
+            executor.operations,
+            vec![
+                SwitchOperation::ShutdownSteam,
+                SwitchOperation::SwitchSteamAccount,
+                SwitchOperation::RecordSwitch,
+                SwitchOperation::RestartFiveE,
+            ]
+        );
+    }
+
+    #[test]
+    fn five_e_restart_failure_keeps_the_steam_switch_successful() {
+        let mut executor = RecordingSwitchWorkflowExecutor {
+            fail_five_e_restart: true,
+            ..Default::default()
+        };
+
+        let warnings =
+            execute_switch_workflow(&mut executor, false, true).expect("Steam switch succeeds");
+
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("5E 未能启动或重启"));
+        assert_eq!(
+            executor.operations.last(),
+            Some(&SwitchOperation::RestartFiveE)
+        );
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum SwitchOperation {
         ShutdownSteam,
         PrepareCs2Config,
         SwitchSteamAccount,
         RecordSwitch,
+        RestartFiveE,
     }
 
     #[derive(Default)]
     struct RecordingSwitchWorkflowExecutor {
         operations: Vec<SwitchOperation>,
+        fail_five_e_restart: bool,
     }
 
     impl SwitchWorkflowExecutor for RecordingSwitchWorkflowExecutor {
@@ -1590,6 +1664,15 @@ mod tests {
         fn record_switch(&mut self) -> AppResult<()> {
             self.operations.push(SwitchOperation::RecordSwitch);
             Ok(())
+        }
+
+        fn restart_five_e(&mut self) -> AppResult<()> {
+            self.operations.push(SwitchOperation::RestartFiveE);
+            if self.fail_five_e_restart {
+                Err(AppError::new("PLATFORM_LAUNCH_FAILED", "无法启动平台程序"))
+            } else {
+                Ok(())
+            }
         }
     }
 }

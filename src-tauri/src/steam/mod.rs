@@ -580,6 +580,88 @@ pub fn launch_platform(app: &PlatformApp) -> AppResult<()> {
     Ok(())
 }
 
+fn normalized_windows_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+fn is_five_e_process(process_name: &str, process_path: Option<&Path>, app: &PlatformApp) -> bool {
+    if !FIVE_E_EXECUTABLES
+        .iter()
+        .any(|allowed| process_name.eq_ignore_ascii_case(allowed))
+    {
+        return false;
+    }
+    let Some(process_path) = process_path else {
+        return false;
+    };
+    let configured_path = Path::new(&app.executable_path);
+    let install_root = app
+        .working_directory
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(Path::new)
+        .or_else(|| configured_path.parent());
+    let Some(install_root) = install_root else {
+        return false;
+    };
+    let process_path = normalized_windows_path(process_path);
+    let configured_path = normalized_windows_path(configured_path);
+    if process_path == configured_path {
+        return true;
+    }
+    let install_root = normalized_windows_path(install_root);
+    process_path
+        .strip_prefix(&install_root)
+        .is_some_and(|suffix| suffix.starts_with('\\'))
+}
+
+fn five_e_process_ids(system: &System, app: &PlatformApp) -> Vec<sysinfo::Pid> {
+    system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            is_five_e_process(&process.name().to_string_lossy(), process.exe(), app).then_some(*pid)
+        })
+        .collect()
+}
+
+pub fn restart_five_e(app: &PlatformApp, shutdown_timeout: Duration) -> AppResult<()> {
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    let process_ids = five_e_process_ids(&system, app);
+    for process_id in &process_ids {
+        let Some(process) = system.process(*process_id) else {
+            continue;
+        };
+        if !process.kill() {
+            return Err(AppError::new(
+                "PLATFORM_SHUTDOWN_FAILED",
+                "无法关闭正在运行的 5E",
+            ));
+        }
+    }
+    if !process_ids.is_empty() {
+        let started = Instant::now();
+        loop {
+            system.refresh_processes(ProcessesToUpdate::All, true);
+            if five_e_process_ids(&system, app).is_empty() {
+                break;
+            }
+            if started.elapsed() >= shutdown_timeout {
+                return Err(AppError::new(
+                    "PLATFORM_SHUTDOWN_TIMEOUT",
+                    "等待 5E 退出超时",
+                ));
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+    launch_platform(app)
+}
+
 #[cfg(windows)]
 fn registry_login_state() -> Option<(String, u32)> {
     use winreg::{enums::*, RegKey};
@@ -603,12 +685,16 @@ pub fn status(dir: Option<&Path>) -> CurrentStatus {
     let running = is_running();
     let account_name = registry_auto_login();
     let mut steam_id64 = None;
+    let mut persona_name = None;
     if let (Some(d), Some(name)) = (dir, account_name.as_deref()) {
         if let Ok(accounts) = read_accounts(d) {
-            steam_id64 = accounts
+            if let Some(account) = accounts
                 .into_iter()
                 .find(|a| a.account_name.as_deref() == Some(name))
-                .map(|a| a.steam_id64);
+            {
+                steam_id64 = Some(account.steam_id64);
+                persona_name = account.persona_name;
+            }
         }
     }
     let kind = if !running {
@@ -624,6 +710,7 @@ pub fn status(dir: Option<&Path>) -> CurrentStatus {
     CurrentStatus {
         kind,
         account_name,
+        persona_name,
         steam_id64,
         steam_running: running,
     }
@@ -1099,6 +1186,40 @@ mod atomic_write_tests {
             most_recent,
             timestamp: None,
         }
+    }
+
+    #[test]
+    fn five_e_process_matching_requires_allowlisted_name_and_install_directory() {
+        let app = PlatformApp {
+            platform_code: "5e".into(),
+            name: "5E".into(),
+            executable_path: r"C:\Games\5EClient\5EClient.exe".into(),
+            arguments: vec![],
+            working_directory: Some(r"C:\Games\5EClient".into()),
+            prelaunch_check: true,
+        };
+
+        assert!(is_five_e_process(
+            "5EClient.exe",
+            Some(Path::new(r"C:\Games\5EClient\5EClient.exe")),
+            &app,
+        ));
+        assert!(is_five_e_process(
+            "Client.exe",
+            Some(Path::new(r"C:\Games\5EClient\resources\Client.exe")),
+            &app,
+        ));
+        assert!(!is_five_e_process(
+            "Client.exe",
+            Some(Path::new(r"C:\Other\Client.exe")),
+            &app,
+        ));
+        assert!(!is_five_e_process(
+            "unrelated.exe",
+            Some(Path::new(r"C:\Games\5EClient\unrelated.exe")),
+            &app,
+        ));
+        assert!(!is_five_e_process("5EClient.exe", None, &app));
     }
 
     #[test]

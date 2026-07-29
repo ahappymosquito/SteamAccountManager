@@ -58,7 +58,7 @@ describe("PlatformsPage", () => {
   });
 
   it("shows 5E as an official-site action and hides completed task chatter", async () => {
-    render(<PlatformsPage accounts={[]} notify={vi.fn()} />);
+    render(<PlatformsPage notify={vi.fn()} />);
     expect(
       await screen.findByRole("button", { name: "打开 5E 官网" }),
     ).toBeInTheDocument();
@@ -67,6 +67,7 @@ describe("PlatformsPage", () => {
     expect(
       screen.queryByText("安装程序已结束，安装包已删除"),
     ).not.toBeInTheDocument();
+    expect(screen.queryByText("账号关联")).not.toBeInTheDocument();
   });
 
   it("replaces the download action with launch when software is installed", async () => {
@@ -81,7 +82,7 @@ describe("PlatformsPage", () => {
       },
     ]);
 
-    render(<PlatformsPage accounts={[]} notify={vi.fn()} />);
+    render(<PlatformsPage notify={vi.fn()} />);
     const launch = await screen.findByRole("button", { name: "启动软件" });
     launch.click();
 
@@ -95,7 +96,7 @@ describe("PlatformsPage", () => {
   });
 
   it("keeps the path chooser as a fallback for an undetected platform", async () => {
-    render(<PlatformsPage accounts={[]} notify={vi.fn()} />);
+    render(<PlatformsPage notify={vi.fn()} />);
 
     expect(
       await screen.findByRole("button", { name: "选择路径" }),
@@ -116,7 +117,7 @@ describe("PlatformsPage", () => {
     ]);
     mocks.openPath.mockResolvedValue(executable);
 
-    render(<PlatformsPage accounts={[]} notify={vi.fn()} />);
+    render(<PlatformsPage notify={vi.fn()} />);
     (await screen.findByRole("button", { name: "选择路径" })).click();
 
     await waitFor(() =>
@@ -171,7 +172,7 @@ describe("PlatformsPage", () => {
       },
     ]);
 
-    render(<PlatformsPage accounts={[]} notify={notify} />);
+    render(<PlatformsPage notify={notify} />);
     await screen.findByText("TeamSpeak 3");
     screen.getByRole("button", { name: "重新检测" }).click();
 

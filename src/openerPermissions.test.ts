@@ -25,6 +25,8 @@ describe("external URL capability", () => {
     "https://github.com/ahappymosquito/SteamAccountManager",
     "https://github.com/ahappymosquito/SteamAccountManager/releases",
     "https://developer.valvesoftware.com/wiki/Bind",
+    "https://csgo.5eplay.com/",
+    "https://pvp.wanmei.com/",
   ])("allows the bundled official link %s", (url) => {
     expect(matchesAllowedUrl(url)).toBe(true);
   });

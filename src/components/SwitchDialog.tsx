@@ -3,6 +3,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import type { Account, CurrentStatus } from "../lib/types";
+import { currentStatusName } from "./CurrentSteamStatus";
 
 type SwitchDialogProps = {
   account: Account;
@@ -41,7 +42,11 @@ export function SwitchDialog({
           </AlertDialog.Title>
           <AlertDialog.Description>
             将关闭并按目标账号重新启动 Steam。已安装 CS2
-            时会先同步所选 CFG，但不会自动启动 CS2 或任何关联平台。工具只能切换本机仍然有效、已被 Steam
+            时会先同步所选 CFG，但不会自动启动 CS2。
+            {account.platformCodes.includes("5e")
+              ? "此账号已关联 5E，Steam 切换完成后会启动或重启 5E。"
+              : "此账号未关联 5E，不会启动第三方平台。"}
+            工具只能切换本机仍然有效、已被 Steam
             记住的登录状态；状态失效时仍需在 Steam 官方客户端完成登录或 Steam Guard 验证。
           </AlertDialog.Description>
           <dl className="facts">
@@ -49,7 +54,7 @@ export function SwitchDialog({
               <dt>当前状态</dt>
               <dd>
                 {status?.kind === "locally_confirmed"
-                  ? status.accountName
+                  ? currentStatusName(status)
                   : "未确认"}
               </dd>
             </div>
@@ -63,7 +68,8 @@ export function SwitchDialog({
           {busy && (
             <div className="progress">
               <span className="spinner" />
-              正在关闭 Steam、准备配置并切换账号…
+              正在关闭 Steam、准备配置并切换账号
+              {account.platformCodes.includes("5e") ? "，随后处理 5E…" : "…"}
             </div>
           )}
           <footer>

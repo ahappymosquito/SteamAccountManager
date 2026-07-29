@@ -1,4 +1,4 @@
-/** Steam-only account switch confirmation behavior coverage. */
+/** Steam and linked-5E account switch confirmation behavior coverage. */
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Account } from "../lib/types";
@@ -19,10 +19,16 @@ const account: Account = {
 afterEach(cleanup);
 
 describe("SwitchDialog", () => {
-  it("states that switching restarts only Steam", () => {
+  it("announces linked 5E restart and shows the current persona name", () => {
     render(
       <SwitchDialog
         account={account}
+        status={{
+          kind: "locally_confirmed",
+          accountName: "login_name",
+          personaName: "当前中文昵称",
+          steamRunning: true,
+        }}
         open
         onOpenChange={vi.fn()}
         onConfirm={vi.fn()}
@@ -30,10 +36,10 @@ describe("SwitchDialog", () => {
     );
 
     expect(
-      screen.getByText(
-        /不会自动启动 CS2 或任何关联平台/,
-      ),
+      screen.getByText(/Steam 切换完成后会启动或重启 5E/),
     ).toBeInTheDocument();
     expect(screen.getByText(/已安装 CS2 时会先同步所选 CFG/)).toBeInTheDocument();
+    expect(screen.getByText("当前中文昵称")).toBeInTheDocument();
+    expect(screen.queryByText("login_name")).not.toBeInTheDocument();
   });
 });

@@ -553,6 +553,37 @@ export function Cs2Page({
               <Code2 />CFG 源码
             </button>
           </div>
+          <div className="cfg-global-actions" aria-label="CFG 参数库操作">
+            <button
+              className="button secondary"
+              onClick={() => void importDefinitions()}
+              title="导入 GPT 维护的 JSONC 参数库"
+              aria-label="导入 CFG 参数库"
+            >
+              <Upload /><span>导入参数</span>
+            </button>
+            <button
+              className="button secondary"
+              onClick={() => void exportDefinitions()}
+              title="导出带 GPT 维护提示词的 JSONC 参数库"
+              aria-label="导出 CFG 参数库"
+            >
+              <Download /><span>导出参数</span>
+            </button>
+            <button
+              className="button secondary"
+              title={`添加到当前分区：${sectionLabels[section]}`}
+              aria-label={`添加命令到${sectionLabels[section]}`}
+              onClick={() =>
+                mutateContent((() => {
+                  const [command, args] = newCommandForSection(section);
+                  return appendCommand(document.source, command, args);
+                })())
+              }
+            >
+              <Plus /><span>添加命令</span>
+            </button>
+          </div>
         </div>
 
         {view === "visual" ? (
@@ -572,33 +603,6 @@ export function Cs2Page({
             <div className="cfg-settings-pane">
               <header>
                 <h2>{sectionLabels[section]}</h2>
-                <div className="cfg-metadata-actions">
-                  <button
-                    className="button secondary"
-                    onClick={() => void importDefinitions()}
-                    title="导入 GPT 维护的 JSONC 参数库"
-                  >
-                    <Upload /><span>导入参数</span>
-                  </button>
-                  <button
-                    className="button secondary"
-                    onClick={() => void exportDefinitions()}
-                    title="导出带 GPT 维护提示词的 JSONC 参数库"
-                  >
-                    <Download /><span>导出参数</span>
-                  </button>
-                  <button
-                    className="button secondary"
-                    onClick={() =>
-                      mutateContent((() => {
-                        const [command, args] = newCommandForSection(section);
-                        return appendCommand(document.source, command, args);
-                      })())
-                    }
-                  >
-                    <Plus /><span>添加命令</span>
-                  </button>
-                </div>
               </header>
               {sectionDefinitions.map((definition) => (
                 <ScalarSettingRow
