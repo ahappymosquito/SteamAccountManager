@@ -19,6 +19,12 @@
         },
         {
           "url": "https://developer.valvesoftware.com/wiki/*"
+        },
+        {
+          "url": "https://csgo.5eplay.com/*"
+        },
+        {
+          "url": "https://pvp.wanmei.com/*"
         }
       ]
     },

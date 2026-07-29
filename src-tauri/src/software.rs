@@ -5,6 +5,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha512};
 use std::{
+    collections::HashSet,
     env,
     fs::{self, File},
     io::{self, Read, Write},
@@ -16,6 +17,9 @@ use std::{
 pub const PERFECT_DOWNLOAD_PAGE: &str = "https://pvp.wanmei.com/";
 pub const FIVE_E_DOWNLOAD_PAGE: &str = "https://arena.5eplay.com/download/latest";
 pub const TEAMSPEAK_DOWNLOAD_PAGE: &str = "https://www.teamspeak.com/en/downloads/";
+const TEAMSPEAK_FOLDERS: &[&str] = &["TeamSpeak 3 Client", "TeamSpeak Client"];
+const TEAMSPEAK_EXECUTABLES: &[&str] = &["ts3client_win64.exe", "ts3client_win32.exe"];
+const REGISTRY_INSTALL_SCAN_DEPTH: usize = 3;
 
 fn launch_official_with(
     url: &str,
@@ -89,7 +93,7 @@ fn client() -> AppResult<Client> {
     Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(60 * 60))
-        .user_agent("SteamAccountManager/0.3.5")
+        .user_agent(concat!("SteamAccountManager/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| {
             AppError::new("DOWNLOAD_CLIENT_FAILED", "无法初始化下载器").detail(error.to_string())
@@ -289,20 +293,227 @@ pub fn download_and_install(
     Ok(())
 }
 
-pub fn discover_teamspeak() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    for variable in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
-        if let Some(root) = env::var_os(variable) {
-            for folder in ["TeamSpeak 3 Client", "TeamSpeak Client"] {
-                candidates.push(
-                    PathBuf::from(&root)
-                        .join(folder)
-                        .join("ts3client_win64.exe"),
-                );
-            }
+fn allowlisted_teamspeak_executable(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            TEAMSPEAK_EXECUTABLES
+                .iter()
+                .any(|executable| name.eq_ignore_ascii_case(executable))
+        })
+}
+
+fn teamspeak_executables_below(directory: &Path, remaining_depth: usize) -> Vec<PathBuf> {
+    let mut candidates = TEAMSPEAK_EXECUTABLES
+        .iter()
+        .map(|executable| directory.join(executable))
+        .collect::<Vec<_>>();
+    if remaining_depth == 0 || !directory.is_dir() {
+        return candidates;
+    }
+    let Ok(entries) = fs::read_dir(directory) else {
+        return candidates;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            candidates.extend(teamspeak_executables_below(&path, remaining_depth - 1));
+        } else if file_type.is_file() && allowlisted_teamspeak_executable(&path) {
+            candidates.push(path);
         }
     }
-    candidates.into_iter().find(|path| path.is_file())
+    candidates
+}
+
+fn teamspeak_candidates_from_roots<'a>(
+    roots: impl IntoIterator<Item = &'a PathBuf>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for root in roots {
+        for folder in TEAMSPEAK_FOLDERS {
+            candidates.extend(teamspeak_executables_below(
+                &root.join(folder),
+                REGISTRY_INSTALL_SCAN_DEPTH,
+            ));
+        }
+    }
+    candidates
+}
+
+fn registry_path(value: &str) -> Option<PathBuf> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let path = if let Some(quoted) = value.strip_prefix('"') {
+        &quoted[..quoted.find('"')?]
+    } else if let Some(index) = value
+        .as_bytes()
+        .windows(4)
+        .position(|window| window.eq_ignore_ascii_case(b".exe"))
+    {
+        &value[..index + 4]
+    } else {
+        value.split(',').next()?.trim().trim_matches('"')
+    };
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
+fn normalized_absolute_path_key(path: &Path) -> Option<String> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let normalized = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Some(
+        normalized
+            .to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_ascii_lowercase(),
+    )
+}
+
+fn registry_teamspeak_anchor_candidates(value: &str) -> Vec<PathBuf> {
+    let Some(path) = registry_path(value) else {
+        return Vec::new();
+    };
+    if !path.is_absolute() {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    if allowlisted_teamspeak_executable(&path) {
+        candidates.push(path.clone());
+    }
+    let directory = if path.extension().is_some() {
+        path.parent()
+    } else {
+        Some(path.as_path())
+    };
+    if let Some(directory) = directory {
+        candidates.extend(teamspeak_executables_below(
+            directory,
+            REGISTRY_INSTALL_SCAN_DEPTH,
+        ));
+    }
+    candidates
+}
+
+fn registry_teamspeak_candidates_from_fields(
+    display_icon: Option<&str>,
+    install_location: Option<&str>,
+    uninstall_string: Option<&str>,
+    quiet_uninstall_string: Option<&str>,
+) -> Vec<PathBuf> {
+    let uninstall_paths = [uninstall_string, quiet_uninstall_string]
+        .into_iter()
+        .flatten()
+        .filter_map(registry_path)
+        .filter_map(|path| normalized_absolute_path_key(&path))
+        .collect::<HashSet<_>>();
+    let mut candidates = Vec::new();
+    if let Some(value) = display_icon {
+        candidates.extend(registry_teamspeak_anchor_candidates(value));
+    }
+    if let Some(value) = install_location {
+        let directory = value.trim().trim_matches('"');
+        if !directory.is_empty() && Path::new(directory).is_absolute() {
+            candidates.extend(teamspeak_executables_below(
+                Path::new(directory),
+                REGISTRY_INSTALL_SCAN_DEPTH,
+            ));
+        }
+    }
+    for value in [uninstall_string, quiet_uninstall_string]
+        .into_iter()
+        .flatten()
+    {
+        candidates.extend(registry_teamspeak_anchor_candidates(value));
+    }
+    candidates.retain(|candidate| {
+        normalized_absolute_path_key(candidate).is_none_or(|path| !uninstall_paths.contains(&path))
+    });
+    candidates
+}
+
+#[cfg(windows)]
+fn registry_teamspeak_candidates() -> Vec<PathBuf> {
+    use winreg::{enums::*, RegKey};
+
+    let mut candidates = Vec::new();
+    let roots = [
+        (
+            RegKey::predef(HKEY_CURRENT_USER),
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        ),
+    ];
+    for (root, key_path) in roots {
+        let Ok(uninstall) = root.open_subkey(key_path) else {
+            continue;
+        };
+        for subkey in uninstall.enum_keys().filter_map(Result::ok) {
+            let Ok(entry) = uninstall.open_subkey(&subkey) else {
+                continue;
+            };
+            let display_name = entry
+                .get_value::<String, _>("DisplayName")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !display_name.contains("teamspeak") {
+                continue;
+            }
+            let display_icon = entry.get_value::<String, _>("DisplayIcon").ok();
+            let install_location = entry.get_value::<String, _>("InstallLocation").ok();
+            let uninstall_string = entry.get_value::<String, _>("UninstallString").ok();
+            let quiet_uninstall_string = entry.get_value::<String, _>("QuietUninstallString").ok();
+            candidates.extend(registry_teamspeak_candidates_from_fields(
+                display_icon.as_deref(),
+                install_location.as_deref(),
+                uninstall_string.as_deref(),
+                quiet_uninstall_string.as_deref(),
+            ));
+        }
+    }
+    candidates
+}
+
+pub fn discover_teamspeak() -> Option<PathBuf> {
+    let roots = [
+        "ProgramW6432",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "LOCALAPPDATA",
+    ]
+    .into_iter()
+    .filter_map(env::var_os)
+    .map(PathBuf::from)
+    .collect::<Vec<_>>();
+    let mut candidates = teamspeak_candidates_from_roots(roots.iter());
+    #[cfg(windows)]
+    {
+        let fallback_roots = [
+            PathBuf::from(r"C:\Program Files"),
+            PathBuf::from(r"C:\Program Files (x86)"),
+        ];
+        candidates.extend(teamspeak_candidates_from_roots(fallback_roots.iter()));
+        candidates.extend(registry_teamspeak_candidates());
+    }
+    candidates
+        .into_iter()
+        .find(|path| path.is_file() && allowlisted_teamspeak_executable(path))
 }
 
 #[cfg(test)]
@@ -339,5 +550,89 @@ mod tests {
         );
         assert!(result.is_ok());
         assert!(attempts.borrow().last().unwrap().starts_with("system:"));
+    }
+
+    #[test]
+    fn discovers_teamspeak_win32_and_win64_default_installations() {
+        let root = tempfile::tempdir().expect("temporary program files");
+        let win64 = root
+            .path()
+            .join("TeamSpeak 3 Client")
+            .join("ts3client_win64.exe");
+        let win32 = root
+            .path()
+            .join("TeamSpeak Client")
+            .join("ts3client_win32.exe");
+        fs::create_dir_all(win64.parent().expect("win64 parent")).expect("win64 directory");
+        fs::create_dir_all(win32.parent().expect("win32 parent")).expect("win32 directory");
+        fs::write(&win64, []).expect("fake win64 client");
+        fs::write(&win32, []).expect("fake win32 client");
+
+        let roots = [root.path().to_path_buf()];
+        let candidates = teamspeak_candidates_from_roots(roots.iter());
+
+        assert!(candidates.contains(&win64));
+        assert!(candidates.contains(&win32));
+    }
+
+    #[test]
+    fn resolves_custom_teamspeak_registry_installation_without_uninstaller() {
+        let installation = tempfile::tempdir().expect("temporary TeamSpeak installation");
+        let executable = installation
+            .path()
+            .join("client")
+            .join("ts3client_win64.exe");
+        let uninstaller = installation.path().join("Uninstall.exe");
+        fs::create_dir_all(executable.parent().expect("client parent"))
+            .expect("custom client directory");
+        fs::write(&executable, []).expect("fake TeamSpeak client");
+        fs::write(&uninstaller, []).expect("fake TeamSpeak uninstaller");
+        let display_icon = format!("{},0", executable.display());
+        let uninstall_command = format!("\"{}\" /S", uninstaller.display());
+
+        let candidates = registry_teamspeak_candidates_from_fields(
+            Some(&display_icon),
+            Some(installation.path().to_string_lossy().as_ref()),
+            Some(&uninstall_command),
+            None,
+        );
+
+        assert!(candidates.contains(&executable));
+        assert!(!candidates.contains(&uninstaller));
+    }
+
+    #[test]
+    fn never_returns_teamspeak_uninstall_command_even_with_a_client_file_name() {
+        let installation = tempfile::tempdir().expect("temporary TeamSpeak installation");
+        let uninstaller = installation.path().join("ts3client_win64.exe");
+        fs::write(&uninstaller, []).expect("fake allow-listed uninstaller");
+        let uninstall_command = format!("\"{}\" /S", uninstaller.display());
+
+        let candidates =
+            registry_teamspeak_candidates_from_fields(None, None, Some(&uninstall_command), None);
+
+        assert!(!candidates.contains(&uninstaller));
+    }
+
+    #[test]
+    fn excludes_all_teamspeak_uninstall_paths_reintroduced_by_other_registry_fields() {
+        let installation = tempfile::tempdir().expect("temporary TeamSpeak installation");
+        let uninstaller = installation.path().join("ts3client_win64.exe");
+        let quiet_uninstaller = installation.path().join("ts3client_win32.exe");
+        fs::write(&uninstaller, []).expect("fake allow-listed uninstaller");
+        fs::write(&quiet_uninstaller, []).expect("fake allow-listed quiet uninstaller");
+        let display_icon = format!("{},0", uninstaller.display());
+        let uninstall_command = format!("\"{}\" /S", uninstaller.display());
+        let quiet_uninstall_command = format!("\"{}\" /S", quiet_uninstaller.display());
+
+        let candidates = registry_teamspeak_candidates_from_fields(
+            Some(&display_icon),
+            Some(installation.path().to_string_lossy().as_ref()),
+            Some(&uninstall_command),
+            Some(&quiet_uninstall_command),
+        );
+
+        assert!(!candidates.contains(&uninstaller));
+        assert!(!candidates.contains(&quiet_uninstaller));
     }
 }

@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, Cs2Config, Cs2RuntimeFile, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformLink, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, TagOption, UpdateInfo, UpdateProgress } from "./types";
+import type { Account, AccountCfgAssignment, CfgProfile, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchResult, TagOption, UpdateInfo, UpdateProgress } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -14,10 +14,14 @@ export const api = {
   beginSteamLogin: () => invoke<SteamLoginSession>("begin_steam_login"),
   steamLoginStatus: (sessionId:string) => invoke<SteamLoginStatus>("get_steam_login_status", { sessionId }),
   cancelSteamLogin: (sessionId:string) => invoke<void>("cancel_steam_login", { sessionId }),
-  switchAccount: (steamId64:string) => invoke<{success:boolean;stage:string;message:string}>("switch_account", { steamId64 }),
+  switchAccount: (steamId64:string) => invoke<SwitchResult>("switch_account", { steamId64 }),
   links: (steamAccountId:string) => invoke<PlatformLink[]>("list_platform_links", { steamAccountId }),
   saveLink: (input:Omit<PlatformLink,"lastVerifiedAt">) => invoke<void>("save_platform_link", { input }),
   deleteLink: (id:string) => invoke<void>("delete_platform_link", { id }),
+  playerData: (platformLinkId:string,forceRefresh=false) => invoke<PlayerSnapshot>("query_player_data", { platformLinkId,forceRefresh }),
+  autoLinkPerfectWorld: (steamAccountId:string,forceRefresh=false) => invoke<PlayerSnapshot>("auto_link_perfectworld", { steamAccountId,forceRefresh }),
+  savePlatformCredential: (platformCode:string,token?:string) => invoke<void>("save_platform_credential", { platformCode,token:token||null }),
+  platformCredentialStatus: (platformCode:string) => invoke<PlatformCredentialStatus>("get_platform_credential_status", { platformCode }),
   settings: () => invoke<Record<string,unknown>>("get_settings"),
   setSetting: (key:string,value:unknown) => invoke<void>("set_setting", { key,value }),
   logs: () => invoke<SwitchLog[]>("list_switch_logs"),
@@ -31,13 +35,12 @@ export const api = {
   createCfgProfile: (name:string,fileName:string,content="") => invoke<CfgProfile>("create_cfg_profile",{name,fileName,content}),
   importCfgProfile: (path:string) => invoke<CfgProfile>("import_cfg_profile",{path}),
   saveCfgProfile: (id:string,name:string,content:string) => invoke<void>("save_cfg_profile",{id,name,content}),
+  exportCfgProfile: (id:string,path:string) => invoke<string>("export_cfg_profile",{id,path}),
+  readCfgDefinitionFile: (path:string) => invoke<string>("read_cfg_definition_file",{path}),
+  writeCfgDefinitionFile: (path:string,content:string) => invoke<string>("write_cfg_definition_file",{path,content}),
   deleteCfgProfile: (id:string) => invoke<void>("delete_cfg_profile",{id}),
   cfgAssignments: () => invoke<AccountCfgAssignment[]>("list_cfg_assignments"),
   assignCfgProfile: (steamAccountId:string,profileId?:string) => invoke<void>("assign_cfg_profile",{steamAccountId,profileId:profileId||null}),
-  cfgVersions: (profileId:string) => invoke<CfgProfileVersion[]>("list_cfg_versions",{profileId}),
-  restoreCfgVersion: (profileId:string,versionId:string) => invoke<string>("restore_cfg_version",{profileId,versionId}),
-  cs2RuntimeFiles: () => invoke<Cs2RuntimeFile[]>("list_cs2_runtime_files"),
-  previewCs2RuntimeFile: (path:string) => invoke<string>("preview_cs2_runtime_file",{path}),
   softwareStatuses: () => invoke<SoftwareStatus[]>("list_software_statuses"),
   downloadProgress: () => invoke<DownloadProgress[]>("list_download_progress"),
   openOfficialUrl: (code:string) => invoke<void>("open_official_url",{code}),

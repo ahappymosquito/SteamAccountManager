@@ -30,7 +30,18 @@ pub struct Account {
     pub favorite: bool,
     pub tags: Vec<String>,
     pub platform_codes: Vec<String>,
+    pub player_ranks: Vec<PlayerRankSummary>,
     pub avatar_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerRankSummary {
+    pub platform: String,
+    pub rank_name: Option<String>,
+    pub score: Option<f64>,
+    pub score_source: Option<String>,
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -93,11 +104,71 @@ pub struct PlatformLinkInput {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerStats {
+    pub sample_size: usize,
+    pub kills: i64,
+    pub deaths: i64,
+    pub kd: Option<f64>,
+    pub rating: Option<f64>,
+    pub adr: Option<f64>,
+    pub headshot_rate: Option<f64>,
+    pub win_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerMatch {
+    pub match_id: String,
+    pub map: Option<String>,
+    pub occurred_at: Option<String>,
+    pub result: Option<String>,
+    pub score: Option<String>,
+    pub kills: Option<i64>,
+    pub deaths: Option<i64>,
+    pub assists: Option<i64>,
+    pub rating: Option<f64>,
+    pub adr: Option<f64>,
+    pub headshot_rate: Option<f64>,
+    pub elo_before: Option<f64>,
+    pub elo_change: Option<f64>,
+    pub elo_after: Option<f64>,
+    pub rounds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerSnapshot {
+    pub platform: String,
+    pub external_id: String,
+    pub nickname: Option<String>,
+    pub avatar_url: Option<String>,
+    pub rank_name: Option<String>,
+    pub elo: Option<f64>,
+    pub elo_source: Option<String>,
+    pub stats: PlayerStats,
+    pub recent_matches: Vec<PlayerMatch>,
+    pub capabilities: Vec<String>,
+    pub warnings: Vec<String>,
+    pub fetched_at: String,
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformCredentialStatus {
+    pub platform_code: String,
+    pub configured: bool,
+    pub expired: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrentStatus {
     pub kind: String,
     pub account_name: Option<String>,
+    pub persona_name: Option<String>,
     pub steam_id64: Option<String>,
     pub steam_running: bool,
 }
@@ -117,6 +188,7 @@ pub struct SwitchResult {
     pub success: bool,
     pub stage: String,
     pub message: String,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -161,31 +233,12 @@ pub struct CfgProfile {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct CfgProfileVersion {
-    pub id: String,
-    pub profile_id: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct AccountCfgAssignment {
     pub steam_account_id: String,
     pub steam_id64: String,
     pub profile_id: String,
     pub profile_name: String,
     pub file_name: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Cs2RuntimeFile {
-    pub steam_id64: String,
-    pub path: String,
-    pub name: String,
-    pub size: u64,
-    pub modified_at: Option<String>,
-    pub editable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

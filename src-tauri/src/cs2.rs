@@ -1,9 +1,8 @@
-//! Managed CS2 cfg profiles, safe runtime previews, and switch-time deployment.
+//! Managed CS2 cfg profiles and safe switch-time deployment.
 use crate::database::Database;
 use crate::error::{AppError, AppResult};
-use crate::models::{CfgProfile, Cs2RuntimeFile};
+use crate::models::CfgProfile;
 use crate::steam;
-use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
@@ -12,7 +11,7 @@ use std::{
 };
 
 const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
-const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 pub fn validate_cfg_file_name(file_name: &str) -> AppResult<String> {
     let trimmed = file_name.trim();
@@ -61,6 +60,96 @@ pub fn write_managed_profile(data_dir: &Path, profile: &CfgProfile) -> AppResult
         fs::write(path, profile.content.as_bytes())?;
         Ok(())
     }
+}
+
+pub fn export_profile(requested: &Path, content: &str) -> AppResult<PathBuf> {
+    let mut path = requested.to_path_buf();
+    match path.extension().and_then(|value| value.to_str()) {
+        None => {
+            path.set_extension("cfg");
+        }
+        Some(extension) if extension.eq_ignore_ascii_case("cfg") => {}
+        Some(_) => {
+            return Err(AppError::new(
+                "CFG_EXPORT_EXTENSION",
+                "导出文件必须使用 .cfg 扩展名",
+            ));
+        }
+    }
+    let parent = path
+        .parent()
+        .filter(|value| value.is_dir())
+        .ok_or_else(|| AppError::new("CFG_EXPORT_PARENT_INVALID", "导出目录不存在或不可用"))?;
+    if !parent.is_dir() || path.is_dir() {
+        return Err(AppError::new(
+            "CFG_EXPORT_PARENT_INVALID",
+            "导出目录不存在或不可用",
+        ));
+    }
+    steam::atomic_write_text(&path, content).map_err(|error| {
+        AppError::new("CFG_EXPORT_FAILED", "CFG 导出失败")
+            .detail(error.details.unwrap_or(error.code))
+    })?;
+    Ok(path)
+}
+
+pub fn read_definition_file(path: &Path) -> AppResult<String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if !path.is_file()
+        || !["json", "jsonc"]
+            .iter()
+            .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+        || fs::metadata(path)?.len() > MAX_TEXT_FILE_BYTES
+    {
+        return Err(AppError::new(
+            "CFG_DEFINITION_IMPORT_INVALID",
+            "请选择不超过 2 MB 的 JSON 或 JSONC 参数库",
+        ));
+    }
+    fs::read_to_string(path).map_err(|_| {
+        AppError::new(
+            "CFG_DEFINITION_IMPORT_ENCODING",
+            "参数库不是有效的 UTF-8 文本",
+        )
+    })
+}
+
+pub fn write_definition_file(requested: &Path, content: &str) -> AppResult<PathBuf> {
+    let mut path = requested.to_path_buf();
+    match path.extension().and_then(|value| value.to_str()) {
+        None => {
+            path.set_extension("jsonc");
+        }
+        Some(extension) if extension.eq_ignore_ascii_case("jsonc") => {}
+        Some(_) => {
+            return Err(AppError::new(
+                "CFG_DEFINITION_EXPORT_EXTENSION",
+                "参数库必须使用 .jsonc 扩展名",
+            ));
+        }
+    }
+    path.parent()
+        .filter(|value| value.is_dir())
+        .ok_or_else(|| {
+            AppError::new(
+                "CFG_DEFINITION_EXPORT_PARENT_INVALID",
+                "参数库导出目录不存在或不可用",
+            )
+        })?;
+    if path.is_dir() {
+        return Err(AppError::new(
+            "CFG_DEFINITION_EXPORT_PARENT_INVALID",
+            "参数库导出目录不存在或不可用",
+        ));
+    }
+    steam::atomic_write_text(&path, content).map_err(|error| {
+        AppError::new("CFG_DEFINITION_EXPORT_FAILED", "参数库导出失败")
+            .detail(error.details.unwrap_or(error.code))
+    })?;
+    Ok(path)
 }
 
 fn quoted_value(input: &str, key: &str) -> Option<String> {
@@ -179,82 +268,6 @@ pub fn prepare_for_switch(
     Ok(Some(file_name))
 }
 
-pub fn list_runtime_files(steam_dir: &Path) -> AppResult<Vec<Cs2RuntimeFile>> {
-    let mut files = Vec::new();
-    for config in steam::discover_cs2_configs(steam_dir)? {
-        for entry in fs::read_dir(&config.path)?.filter_map(Result::ok) {
-            let path = entry.path();
-            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let extension = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default();
-            if !["cfg", "vcfg", "txt"]
-                .iter()
-                .any(|allowed| extension.eq_ignore_ascii_case(allowed))
-            {
-                continue;
-            }
-            let metadata = entry.metadata()?;
-            let modified_at = metadata
-                .modified()
-                .ok()
-                .map(DateTime::<Utc>::from)
-                .map(|value| value.to_rfc3339());
-            files.push(Cs2RuntimeFile {
-                steam_id64: config.steam_id64.clone(),
-                path: path.to_string_lossy().into_owned(),
-                name,
-                size: metadata.len(),
-                modified_at,
-                editable: extension.eq_ignore_ascii_case("cfg"),
-            });
-        }
-    }
-    files.sort_by(|left, right| {
-        left.steam_id64
-            .cmp(&right.steam_id64)
-            .then(left.name.cmp(&right.name))
-    });
-    Ok(files)
-}
-
-pub fn preview_runtime_file(steam_dir: &Path, requested: &Path) -> AppResult<String> {
-    let root = steam_dir.join("userdata").canonicalize()?;
-    let path = requested.canonicalize()?;
-    if !path.starts_with(&root) || !path.is_file() {
-        return Err(AppError::new(
-            "CFG_PREVIEW_PATH_INVALID",
-            "只能预览 Steam userdata 中的 CS2 配置文件",
-        ));
-    }
-    let metadata = fs::metadata(&path)?;
-    if metadata.len() > MAX_PREVIEW_BYTES {
-        return Err(AppError::new(
-            "CFG_PREVIEW_TOO_LARGE",
-            "配置文件超过 2 MB，无法预览",
-        ));
-    }
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    if !["cfg", "vcfg", "txt"]
-        .iter()
-        .any(|allowed| extension.eq_ignore_ascii_case(allowed))
-    {
-        return Err(AppError::new(
-            "CFG_PREVIEW_TYPE_INVALID",
-            "该文件类型不支持预览",
-        ));
-    }
-    fs::read_to_string(path)
-        .map_err(|_| AppError::new("CFG_PREVIEW_ENCODING", "配置文件不是有效 UTF-8 文本"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +326,54 @@ mod tests {
         let steam = tempfile::tempdir().expect("steam root");
 
         assert!(!is_installed(steam.path()));
+    }
+
+    #[test]
+    fn exports_utf8_cfg_and_adds_missing_extension() {
+        let directory = tempfile::tempdir().expect("export directory");
+        let requested = directory.path().join("训练配置");
+        let exported = export_profile(&requested, "// 配置\nvolume 0.5\n").expect("export");
+
+        assert_eq!(
+            exported.extension().and_then(|value| value.to_str()),
+            Some("cfg")
+        );
+        assert_eq!(
+            fs::read_to_string(exported).expect("read export"),
+            "// 配置\nvolume 0.5\n"
+        );
+    }
+
+    #[test]
+    fn rejects_non_cfg_export_extensions_and_missing_parents() {
+        let directory = tempfile::tempdir().expect("export directory");
+        let wrong_extension = export_profile(&directory.path().join("config.txt"), "");
+        assert_eq!(
+            wrong_extension.expect_err("reject extension").code,
+            "CFG_EXPORT_EXTENSION"
+        );
+        let missing_parent =
+            export_profile(&directory.path().join("missing").join("config.cfg"), "");
+        assert_eq!(
+            missing_parent.expect_err("reject parent").code,
+            "CFG_EXPORT_PARENT_INVALID"
+        );
+    }
+
+    #[test]
+    fn reads_and_writes_utf8_definition_files() {
+        let directory = tempfile::tempdir().expect("definition directory");
+        let requested = directory.path().join("cfg-parameters");
+        let content = "/* GPT 提示词 */\n{\"schemaVersion\":1,\"definitions\":[]}\n";
+        let exported = write_definition_file(&requested, content).expect("write definition file");
+
+        assert_eq!(
+            exported.extension().and_then(|value| value.to_str()),
+            Some("jsonc")
+        );
+        assert_eq!(
+            read_definition_file(&exported).expect("read definition file"),
+            content
+        );
     }
 }

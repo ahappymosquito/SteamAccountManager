@@ -1,4 +1,4 @@
-/** Dense platform installation controls and synchronized Steam account associations. */
+/** Dense platform installation, detection, download, and launch controls. */
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -9,25 +9,18 @@ import {
   Play,
   RefreshCw,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
 import type {
-  Account,
   AppError,
   DownloadProgress,
   PlatformApp,
-  PlatformLink,
   SoftwareStatus,
 } from "../lib/types";
 
 const errorMessage = (error: unknown) =>
   (error as AppError)?.message || "操作失败";
-const labels: Record<string, string> = {
-  perfectworld: "完美世界",
-  "5e": "5E",
-};
-
 const officialIcons: Record<SoftwareStatus["code"], string> = {
   perfectworld: "/platforms/perfectworld.ico",
   "5e": "/platforms/5e.png",
@@ -35,28 +28,19 @@ const officialIcons: Record<SoftwareStatus["code"], string> = {
 };
 
 export function PlatformsPage({
-  accounts,
   notify,
 }: {
-  accounts: Account[];
   notify: (kind: "success" | "error", text: string) => void;
 }) {
   const [software, setSoftware] = useState<SoftwareStatus[]>([]);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
-  const [links, setLinks] = useState<Record<string, PlatformLink[]>>({});
   const [detecting, setDetecting] = useState(false);
   const [launching, setLaunching] = useState<string>();
 
   const load = async () => {
-    const [statuses, downloads, accountLinks] = await Promise.all([
+    const [statuses, downloads] = await Promise.all([
       api.softwareStatuses(),
       api.downloadProgress(),
-      Promise.all(
-        accounts.map(
-          async (account) =>
-            [account.id, await api.links(account.id)] as const,
-        ),
-      ),
     ]);
     setSoftware(statuses);
     setProgress(
@@ -66,7 +50,7 @@ export function PlatformsPage({
           .map((item) => [item.code, item]),
       ),
     );
-    setLinks(Object.fromEntries(accountLinks));
+    return statuses;
   };
 
   useEffect(() => {
@@ -87,15 +71,16 @@ export function PlatformsPage({
       unlisten = value;
     });
     return () => unlisten?.();
-  }, [accounts.length]);
+  }, []);
 
   const detect = async () => {
     setDetecting(true);
     try {
       const found = await api.discoverPlatformApps();
       await Promise.all(found.map((item) => api.savePlatformApp(item)));
-      await load();
-      notify("success", `检测到 ${found.length} 个平台客户端`);
+      const statuses = await load();
+      const installed = statuses.filter((item) => item.installed).length;
+      notify("success", `检测到 ${installed} 个已安装软件`);
     } catch (error) {
       notify("error", errorMessage(error));
     } finally {
@@ -104,7 +89,6 @@ export function PlatformsPage({
   };
 
   const choose = async (item: SoftwareStatus) => {
-    if (item.code === "teamspeak3") return;
     const selected = await open({
       multiple: false,
       filters: [{ name: "Windows 程序", extensions: ["exe"] }],
@@ -112,7 +96,7 @@ export function PlatformsPage({
     });
     if (typeof selected !== "string") return;
     const app: PlatformApp = {
-      platformCode: item.code,
+      platformCode: item.code as PlatformApp["platformCode"],
       name: item.name,
       executablePath: selected,
       arguments: [],
@@ -161,37 +145,12 @@ export function PlatformsPage({
     }
   };
 
-  const grouped = useMemo(
-    () =>
-      Object.fromEntries(
-        ["perfectworld", "5e"].map((code) => [
-          code,
-          accounts
-            .filter((account) =>
-              (account.platformCodes || []).includes(
-                code as "perfectworld" | "5e",
-              ),
-            )
-            .map((account) => ({
-              account,
-              links: (links[account.id] || []).filter(
-                (link) => link.platformCode === code,
-              ),
-            })),
-        ]),
-      ),
-    [accounts, links],
-  );
-  const linkedCodes = (["perfectworld", "5e"] as const).filter(
-    (code) => grouped[code].length,
-  );
-
   return (
     <section>
       <header className="page-heading">
         <div>
           <h1>平台</h1>
-          <p>客户端与账号关联</p>
+          <p>检测、配置并启动常用平台客户端。</p>
         </div>
         <button
           className="button secondary"
@@ -259,7 +218,7 @@ export function PlatformsPage({
                 {item.installed ? "已安装" : "未安装"}
               </span>
               <div className="software-actions">
-                {item.code !== "teamspeak3" && (
+                {!item.installed && (
                   <button
                     className="button secondary compact-action"
                     onClick={() => void choose(item)}
@@ -300,50 +259,6 @@ export function PlatformsPage({
         })}
       </section>
 
-      <section className="platform-associations">
-        <div className="section-heading">
-          <h2>账号关联</h2>
-        </div>
-        {linkedCodes.length ? (
-          linkedCodes.map((code) => (
-            <div className="association-group" key={code}>
-              <header>
-                <h3>{labels[code]}</h3>
-                <span>{grouped[code].length}</span>
-              </header>
-              <div>
-                {grouped[code].map(
-                  ({
-                    account,
-                    links: accountLinks,
-                  }: {
-                    account: Account;
-                    links: PlatformLink[];
-                  }) => (
-                    <article key={account.id}>
-                      <strong>
-                        {account.personaName ||
-                          account.alias ||
-                          account.accountName ||
-                          "未命名账号"}
-                      </strong>
-                      <small>…{account.steamId64.slice(-6)}</small>
-                      <span>
-                        {accountLinks
-                          .map((link) => link.displayName || link.externalId)
-                          .filter(Boolean)
-                          .join(" · ") || "未填写平台昵称"}
-                      </span>
-                    </article>
-                  ),
-                )}
-              </div>
-            </div>
-          ))
-        ) : (
-          <p className="empty-line">暂无关联</p>
-        )}
-      </section>
     </section>
   );
 }

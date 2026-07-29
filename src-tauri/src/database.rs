@@ -1,8 +1,8 @@
 //! SQLite migrations and transactional repositories for application data.
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    Account, AccountCfgAssignment, CfgProfile, CfgProfileVersion, LocalSteamAccount, PlatformApp,
-    PlatformLink, PlatformLinkInput, ProfileInput, TagOption,
+    Account, AccountCfgAssignment, CfgProfile, LocalSteamAccount, PlatformApp, PlatformLink,
+    PlatformLinkInput, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -86,6 +86,7 @@ impl Database {
                 favorite: r.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
                 tags: Vec::new(),
                 platform_codes: Vec::new(),
+                player_ranks: Vec::new(),
                 avatar_path: None,
             })
         })?;
@@ -99,8 +100,49 @@ impl Database {
             account.platform_codes = platforms
                 .query_map([&account.id], |r| r.get(0))?
                 .collect::<Result<_, _>>()?;
+            let mut ranks = conn.prepare(
+                "SELECT p.platform_code,c.snapshot_json,c.expires_at
+                 FROM account_platform_links l
+                 JOIN platform_accounts p ON p.id=l.platform_account_id
+                 JOIN player_snapshot_cache c ON c.platform_link_id=l.id
+                 WHERE l.steam_account_id=?1
+                 ORDER BY p.platform_code",
+            )?;
+            account.player_ranks = ranks
+                .query_map([&account.id], |row| {
+                    let platform: String = row.get(0)?;
+                    let payload: String = row.get(1)?;
+                    let expires_at: String = row.get(2)?;
+                    let snapshot = serde_json::from_str::<PlayerSnapshot>(&payload).ok();
+                    Ok(snapshot.map(|snapshot| PlayerRankSummary {
+                        platform,
+                        rank_name: snapshot.rank_name,
+                        score: snapshot.elo,
+                        score_source: snapshot.elo_source,
+                        stale: snapshot.stale
+                            || chrono::DateTime::parse_from_rfc3339(&expires_at)
+                                .is_ok_and(|expires| expires <= Utc::now()),
+                    }))
+                })?
+                .filter_map(|result| result.transpose())
+                .collect::<Result<_, _>>()?;
         }
         Ok(accounts)
+    }
+
+    pub fn account_identity(
+        &self,
+        account_id: &str,
+    ) -> AppResult<Option<(String, Option<String>)>> {
+        Ok(self
+            .0
+            .lock()
+            .query_row(
+                "SELECT steam_id64,persona_name FROM steam_accounts WHERE id=?1",
+                [account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
     }
 
     pub fn list_tags(&self) -> AppResult<Vec<TagOption>> {
@@ -208,6 +250,33 @@ impl Database {
         Ok(links)
     }
 
+    pub fn refreshable_five_e_links(&self) -> AppResult<Vec<PlatformLink>> {
+        let conn = self.0.lock();
+        let mut stmt = conn.prepare(
+            "SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.remark,p.status,p.last_verified_at
+             FROM account_platform_links l
+             JOIN platform_accounts p ON p.id=l.platform_account_id
+             WHERE p.platform_code='5e' AND TRIM(COALESCE(p.external_id,''))<>''
+             ORDER BY l.id",
+        )?;
+        let links = stmt
+            .query_map([], |row| {
+                Ok(PlatformLink {
+                    id: row.get(0)?,
+                    steam_account_id: row.get(1)?,
+                    platform_code: row.get(2)?,
+                    external_id: row.get(3)?,
+                    display_name: row.get(4)?,
+                    profile_url: row.get(5)?,
+                    remark: row.get(6)?,
+                    status: row.get(7)?,
+                    last_verified_at: row.get(8)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(links)
+    }
+
     pub fn save_link(&self, input: &PlatformLinkInput) -> AppResult<()> {
         if !["perfectworld", "5e", "faceit", "other"].contains(&input.platform_code.as_str()) {
             return Err(AppError::new("INVALID_PLATFORM", "不支持的平台类型"));
@@ -236,6 +305,13 @@ impl Database {
             .id
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let previous_identity: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT p.platform_code,p.external_id FROM account_platform_links l JOIN platform_accounts p ON p.id=l.platform_account_id WHERE l.id=?1",
+                [&link_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
         let platform_id: Option<String> = tx
             .query_row(
                 "SELECT platform_account_id FROM account_platform_links WHERE id=?1",
@@ -246,6 +322,22 @@ impl Database {
         let platform_id = platform_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         tx.execute("INSERT INTO platform_accounts(id,platform_code,external_id,display_name,profile_url,remark,status,binding_method,last_verified_at,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'manual',CASE WHEN ?7='user_confirmed' THEN ?8 ELSE NULL END,?8,?8) ON CONFLICT(id) DO UPDATE SET platform_code=excluded.platform_code,external_id=excluded.external_id,display_name=excluded.display_name,profile_url=excluded.profile_url,remark=excluded.remark,status=excluded.status,last_verified_at=CASE WHEN excluded.status='user_confirmed' THEN excluded.updated_at ELSE platform_accounts.last_verified_at END,updated_at=excluded.updated_at",params![platform_id,input.platform_code,input.external_id,input.display_name,input.profile_url,input.remark,input.status,now])?;
         tx.execute("INSERT INTO account_platform_links(id,steam_account_id,platform_account_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?4) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at",params![link_id,input.steam_account_id,platform_id,now])?;
+        let normalize = |value: Option<&str>| {
+            value
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        let identity_changed = previous_identity.is_some_and(|(platform_code, external_id)| {
+            platform_code != input.platform_code
+                || normalize(external_id.as_deref()) != normalize(input.external_id.as_deref())
+        });
+        if identity_changed {
+            tx.execute(
+                "DELETE FROM player_snapshot_cache WHERE platform_link_id=?1",
+                [&link_id],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -264,6 +356,57 @@ impl Database {
             tx.execute("DELETE FROM platform_accounts WHERE id=?1", [pid])?;
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    pub fn platform_link(&self, id: &str) -> AppResult<Option<PlatformLink>> {
+        let conn = self.0.lock();
+        Ok(conn
+            .query_row(
+                "SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.remark,p.status,p.last_verified_at FROM account_platform_links l JOIN platform_accounts p ON p.id=l.platform_account_id WHERE l.id=?1",
+                [id],
+                |r| {
+                    Ok(PlatformLink {
+                        id: r.get(0)?,
+                        steam_account_id: r.get(1)?,
+                        platform_code: r.get(2)?,
+                        external_id: r.get(3)?,
+                        display_name: r.get(4)?,
+                        profile_url: r.get(5)?,
+                        remark: r.get(6)?,
+                        status: r.get(7)?,
+                        last_verified_at: r.get(8)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn player_snapshot_cache(
+        &self,
+        platform_link_id: &str,
+    ) -> AppResult<Option<(String, String)>> {
+        let conn = self.0.lock();
+        Ok(conn
+            .query_row(
+                "SELECT snapshot_json,expires_at FROM player_snapshot_cache WHERE platform_link_id=?1",
+                [platform_link_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn save_player_snapshot_cache(
+        &self,
+        platform_link_id: &str,
+        snapshot_json: &str,
+        fetched_at: &str,
+        expires_at: &str,
+    ) -> AppResult<()> {
+        self.0.lock().execute(
+            "INSERT INTO player_snapshot_cache(platform_link_id,snapshot_json,fetched_at,expires_at) VALUES(?1,?2,?3,?4) ON CONFLICT(platform_link_id) DO UPDATE SET snapshot_json=excluded.snapshot_json,fetched_at=excluded.fetched_at,expires_at=excluded.expires_at",
+            params![platform_link_id, snapshot_json, fetched_at, expires_at],
+        )?;
         Ok(())
     }
 
@@ -468,34 +611,19 @@ impl Database {
     }
 
     pub fn save_cfg_profile(&self, id: &str, name: &str, content: &str) -> AppResult<()> {
-        let mut conn = self.0.lock();
-        let tx = conn.transaction()?;
-        let previous: Option<String> = tx
-            .query_row(
-                "SELECT content FROM cfg_profiles WHERE id=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let previous = previous
-            .ok_or_else(|| AppError::new("CFG_PROFILE_NOT_FOUND", "找不到该 CS2 cfg 方案"))?;
         let now = Utc::now().to_rfc3339();
-        if previous != content {
-            tx.execute(
-                "INSERT INTO cfg_profile_versions(id,profile_id,content,created_at) VALUES(?1,?2,?3,?4)",
-                params![Uuid::new_v4().to_string(), id, previous, now],
-            )?;
-            tx.execute(
-                "DELETE FROM cfg_profile_versions WHERE profile_id=?1 AND id NOT IN (SELECT id FROM cfg_profile_versions WHERE profile_id=?1 ORDER BY created_at DESC LIMIT 10)",
-                [id],
-            )?;
-        }
-        tx.execute(
+        let changed = self.0.lock().execute(
             "UPDATE cfg_profiles SET name=?1,content=?2,updated_at=?3 WHERE id=?4",
             params![name, content, now, id],
         )?;
-        tx.commit()?;
-        Ok(())
+        if changed == 0 {
+            Err(AppError::new(
+                "CFG_PROFILE_NOT_FOUND",
+                "找不到该 CS2 cfg 方案",
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn delete_cfg_profile(&self, id: &str) -> AppResult<()> {
@@ -628,36 +756,6 @@ impl Database {
             )
             .optional()?)
     }
-
-    pub fn list_cfg_versions(&self, profile_id: &str) -> AppResult<Vec<CfgProfileVersion>> {
-        let conn = self.0.lock();
-        let mut statement = conn.prepare(
-            "SELECT id,profile_id,created_at FROM cfg_profile_versions WHERE profile_id=?1 ORDER BY created_at DESC",
-        )?;
-        let versions = statement
-            .query_map([profile_id], |row| {
-                Ok(CfgProfileVersion {
-                    id: row.get(0)?,
-                    profile_id: row.get(1)?,
-                    created_at: row.get(2)?,
-                })
-            })?
-            .collect::<Result<_, _>>()?;
-        Ok(versions)
-    }
-
-    pub fn restore_cfg_version(&self, profile_id: &str, version_id: &str) -> AppResult<String> {
-        let conn = self.0.lock();
-        let content: String = conn
-            .query_row(
-                "SELECT content FROM cfg_profile_versions WHERE id=?1 AND profile_id=?2",
-                params![version_id, profile_id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| AppError::new("CFG_VERSION_NOT_FOUND", "找不到该历史版本"))?;
-        Ok(content)
-    }
 }
 
 pub fn validate_steam_id(value: &str) -> AppResult<()> {
@@ -748,6 +846,90 @@ mod tests {
     }
 
     #[test]
+    fn player_snapshot_cache_persists_only_normalized_snapshot_and_expiry() {
+        let temp = tempfile::tempdir().expect("temp");
+        let db = Database::open(&temp.path().join("player-cache.db")).expect("db");
+        db.sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
+        let account = db.list_accounts().expect("accounts").remove(0);
+        db.save_link(&PlatformLinkInput {
+            id: Some("link-5e".into()),
+            steam_account_id: account.id.clone(),
+            platform_code: "5e".into(),
+            external_id: Some("123456".into()),
+            display_name: None,
+            profile_url: None,
+            remark: None,
+            status: "user_confirmed".into(),
+        })
+        .expect("platform link");
+        let normalized = r#"{"platform":"5e","externalId":"123456","warnings":[]}"#;
+
+        db.save_player_snapshot_cache(
+            "link-5e",
+            normalized,
+            "2026-07-27T08:00:00Z",
+            "2026-07-27T08:15:00Z",
+        )
+        .expect("save snapshot");
+
+        let cached = db
+            .player_snapshot_cache("link-5e")
+            .expect("read snapshot")
+            .expect("snapshot exists");
+        assert_eq!(cached.0, normalized);
+        assert_eq!(cached.1, "2026-07-27T08:15:00Z");
+        assert!(!cached.0.contains("token"));
+
+        db.save_link(&PlatformLinkInput {
+            id: Some("link-5e".into()),
+            steam_account_id: account.id,
+            platform_code: "5e".into(),
+            external_id: Some("654321".into()),
+            display_name: Some("新玩家".into()),
+            profile_url: None,
+            remark: None,
+            status: "unverified".into(),
+        })
+        .expect("change linked player");
+        assert!(db
+            .player_snapshot_cache("link-5e")
+            .expect("read cleared snapshot")
+            .is_none());
+    }
+
+    #[test]
+    fn scheduled_five_e_refresh_selects_only_links_with_player_identifiers() {
+        let temp = tempfile::tempdir().expect("temp");
+        let db = Database::open(&temp.path().join("five-e-refresh.db")).expect("db");
+        db.sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
+        let account = db.list_accounts().expect("accounts").remove(0);
+        for (id, platform_code, external_id) in [
+            ("five-e-ready", "5e", Some("玩家名称")),
+            ("five-e-empty", "5e", Some("   ")),
+            ("perfect-ready", "perfectworld", Some("76561198000000001")),
+        ] {
+            db.save_link(&PlatformLinkInput {
+                id: Some(id.into()),
+                steam_account_id: account.id.clone(),
+                platform_code: platform_code.into(),
+                external_id: external_id.map(str::to_string),
+                display_name: None,
+                profile_url: None,
+                remark: None,
+                status: "unverified".into(),
+            })
+            .expect("platform link");
+        }
+
+        let links = db.refreshable_five_e_links().expect("refreshable links");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].id, "five-e-ready");
+        assert_eq!(links[0].external_id.as_deref(), Some("玩家名称"));
+    }
+
+    #[test]
     fn hidden_accounts_keep_profile_and_restore_after_credentials_return() {
         let temp = tempfile::tempdir().expect("temp");
         let db = Database::open(&temp.path().join("tags.db")).expect("db");
@@ -795,6 +977,41 @@ mod tests {
                 .expect_err("last profile cannot be deleted")
                 .code,
             "CFG_LAST_PROFILE"
+        );
+    }
+
+    #[test]
+    fn cfg_save_updates_profile_without_creating_history_snapshots() {
+        let temp = tempfile::tempdir().expect("temp");
+        let db = Database::open(&temp.path().join("cfg-save.db")).expect("db");
+        let profile = db.ensure_active_cfg_profile().expect("default profile");
+        db.0.lock()
+            .execute(
+                "INSERT INTO cfg_profile_versions(id,profile_id,content,created_at) VALUES('legacy-version',?1,'old content','2026-07-28T00:00:00Z')",
+                [&profile.id],
+            )
+            .expect("legacy history");
+
+        db.save_cfg_profile(&profile.id, "Updated", "fps_max 400")
+            .expect("save profile");
+
+        let saved = db.active_cfg_profile().expect("saved profile");
+        assert_eq!(saved.name, "Updated");
+        assert_eq!(saved.content, "fps_max 400");
+        let history_count: i64 =
+            db.0.lock()
+                .query_row(
+                    "SELECT COUNT(*) FROM cfg_profile_versions WHERE profile_id=?1",
+                    [&profile.id],
+                    |row| row.get(0),
+                )
+                .expect("history count");
+        assert_eq!(history_count, 1);
+        assert_eq!(
+            db.save_cfg_profile("missing", "Missing", "")
+                .expect_err("missing profile")
+                .code,
+            "CFG_PROFILE_NOT_FOUND"
         );
     }
 }

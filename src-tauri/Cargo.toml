@@ -1,6 +1,6 @@
 [package]
 name = "steam-account-manager"
-version = "0.6.0"
+version = "0.9.0"
 description = "Local Steam account manager for Windows"
 authors = ["Steam Account Manager Contributors"]
 edition = "2021"
@@ -29,8 +29,9 @@ sysinfo = "0.33"
 url = "2"
 tempfile = "3"
 sha2 = "0.10"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 base64 = "0.22"
+keyring = "4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

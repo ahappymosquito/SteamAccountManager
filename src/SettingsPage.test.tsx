@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   discoverSteam: vi.fn(),
   getVersion: vi.fn(),
   openUrl: vi.fn(),
+  platformCredentialStatus: vi.fn(),
+  savePlatformCredential: vi.fn(),
 }));
 
 vi.mock("./lib/api", () => ({
@@ -46,6 +48,12 @@ describe("SettingsPage", () => {
     mocks.setSetting.mockResolvedValue(undefined);
     mocks.getVersion.mockResolvedValue("0.4.2");
     mocks.openUrl.mockResolvedValue(undefined);
+    mocks.platformCredentialStatus.mockResolvedValue({
+      platformCode: "5e",
+      configured: false,
+      expired: false,
+    });
+    mocks.savePlatformCredential.mockResolvedValue(undefined);
   });
 
   it("persists Steam path and timeout while recovery stays low priority", async () => {
@@ -104,6 +112,73 @@ describe("SettingsPage", () => {
     expect(
       screen.getByRole("button", { name: "查看 Releases" }),
     ).toBeEnabled();
+  });
+
+  it("stores and removes the optional 5E token through the credential API", async () => {
+    const notify = vi.fn();
+    mocks.platformCredentialStatus
+      .mockResolvedValueOnce({
+        platformCode: "5e",
+        configured: false,
+        expired: false,
+      })
+      .mockResolvedValue({
+        platformCode: "5e",
+        configured: true,
+        expired: false,
+      });
+    render(<SettingsPage notify={notify} onConfigured={vi.fn()} />);
+
+    const token = await screen.findByLabelText("Bearer Token");
+    fireEvent.change(token, { target: { value: "secret-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Token" }));
+
+    await waitFor(() =>
+      expect(mocks.savePlatformCredential).toHaveBeenCalledWith(
+        "5e",
+        "secret-token",
+      ),
+    );
+    expect(notify).toHaveBeenCalledWith("success", "5E Token 已安全保存");
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 Token" }));
+    await waitFor(() =>
+      expect(mocks.savePlatformCredential).toHaveBeenCalledWith(
+        "5e",
+        undefined,
+      ),
+    );
+  });
+
+  it("opens accessible credential guidance and first-party platform links", async () => {
+    render(<SettingsPage notify={vi.fn()} onConfigured={vi.fn()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "查看 5E Token 获取步骤",
+      }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "如何获取 5E 查询凭据" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/没有公开的 API 凭据申请页/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/继续匿名查询/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开 5E 官网" }));
+    await waitFor(() =>
+      expect(mocks.openUrl).toHaveBeenCalledWith("https://csgo.5eplay.com/"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "查看完美平台 Token 获取步骤",
+      }),
+    );
+    expect(
+      screen.getByText(/steam_cn_token Cookie 或 access_token 参数/),
+    ).toBeInTheDocument();
   });
 
   it("shows signed update details and portable conversion action", async () => {

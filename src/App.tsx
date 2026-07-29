@@ -16,9 +16,11 @@ import {
 } from "lucide-react";
 
 import { AccountAvatar } from "./components/AccountAvatar";
+import { AccountPlatformBadges } from "./components/AccountPlatformBadges";
 import { AppUpdateBanner } from "./components/AppUpdateBanner";
 import { flushCfgDraft } from "./cfgWorkspace";
 import { AccountDrawer } from "./components/AccountDrawer";
+import { CurrentSteamStatus } from "./components/CurrentSteamStatus";
 import { SteamLoginDialog } from "./components/SteamLoginDialog";
 import { SwitchDialog } from "./components/SwitchDialog";
 import { TagFilter } from "./components/TagFilter";
@@ -27,11 +29,11 @@ import { api } from "./lib/api";
 import { APP_ICON_PATH } from "./lib/appMeta";
 import { filterAccounts } from "./lib/filter";
 import { applyTheme, resolveTheme, savedTheme, storedTheme } from "./lib/themes";
+import { switchResultNotice } from "./lib/switchResult";
 import type {
   Account,
   AppError,
   CurrentStatus,
-  PlatformCode,
   ProfileInput,
   SteamLoginSession,
   SwitchLog,
@@ -43,7 +45,7 @@ import type {
 import { Cs2Page } from "./pages/Cs2Page";
 import { PlatformsPage } from "./pages/PlatformsPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { useUi, type PlatformFilter } from "./store";
+import { useUi, type NoticeKind, type PlatformFilter } from "./store";
 
 export { SettingsPage } from "./pages/SettingsPage";
 
@@ -56,13 +58,6 @@ const formatTime = (value?: string) =>
         timeStyle: "short",
       }).format(new Date(value))
     : "从未";
-const platformLabels: Record<PlatformCode, string> = {
-  perfectworld: "完美世界",
-  "5e": "5E",
-  faceit: "FACEIT",
-  other: "其他",
-};
-
 export default function App() {
   const ui = useUi();
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -78,7 +73,7 @@ export default function App() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateDismissed, setUpdateDismissed] = useState(false);
 
-  const notify = (kind: "success" | "error", text: string) => {
+  const notify = (kind: NoticeKind, text: string) => {
     ui.notify({ kind, text });
     window.setTimeout(() => ui.notify(null), 4500);
   };
@@ -214,9 +209,10 @@ export default function App() {
     if (!switching) return;
     try {
       await flushCfgDraft();
-      await api.switchAccount(switching.steamId64);
+      const result = await api.switchAccount(switching.steamId64);
       await load();
-      notify("success", "启动参数与 CFG 已验证，Steam 账号切换完成");
+      const notice = switchResultNotice(result);
+      notify(notice.kind, notice.text);
     } catch (error) {
       notify("error", errorMessage(error));
       throw error;
@@ -360,7 +356,7 @@ export default function App() {
             <Cs2Page notify={notify} />
           )}
           {ui.page === "platforms" && (
-            <PlatformsPage accounts={accounts} notify={notify} />
+            <PlatformsPage notify={notify} />
           )}
           {ui.page === "logs" && <LogsPage notify={notify} />}
           {ui.page === "settings" && (
@@ -426,22 +422,6 @@ function Nav({
   );
 }
 
-function Status({ status }: { status?: CurrentStatus }) {
-  const labels = {
-    locally_confirmed: "本地确认",
-    inferred: "当前推测",
-    steam_not_running: "Steam 未运行",
-    unknown: "状态未知",
-  };
-  return (
-    <div className={`status ${status?.kind ?? "unknown"}`}>
-      <span />
-      {status ? labels[status.kind] : "正在检查"}
-      {status?.accountName && <strong>{status.accountName}</strong>}
-    </div>
-  );
-}
-
 function AccountsPage({
   accounts,
   tagOptions,
@@ -472,7 +452,7 @@ function AccountsPage({
           <h1>Steam 账号</h1>
           <p>{accounts.length} 个符合当前条件的本机已记住账号</p>
         </div>
-        <Status status={status} />
+        <CurrentSteamStatus status={status} />
       </header>
       <section className="toolbar">
         <label className="search">
@@ -557,16 +537,7 @@ function AccountsPage({
                   {account.favorite && <Star className="favorite" />}
                 </div>
                 <div className="metadata-row">
-                  <div className="platform-badges">
-                    {(account.platformCodes ?? []).map((code) => (
-                      <span className="platform-badge" key={code}>
-                        {platformLabels[code]}
-                      </span>
-                    ))}
-                    {!(account.platformCodes ?? []).length && (
-                      <span className="platform-badge muted">未关联平台</span>
-                    )}
-                  </div>
+                  <AccountPlatformBadges account={account} />
                   <div className="tags">
                     {account.tags.map((tag) => (
                       <span key={tag}>{tag}</span>

@@ -1,7 +1,7 @@
 {
   "name": "steam-account-manager",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.9.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -24,6 +24,7 @@
     "@tauri-apps/plugin-clipboard-manager": "latest",
     "@tauri-apps/plugin-dialog": "latest",
     "@tauri-apps/plugin-opener": "latest",
+    "csgo-sharecode": "^5.0.0",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
