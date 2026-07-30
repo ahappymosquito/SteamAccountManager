@@ -1,5 +1,10 @@
 # Steam Account Manager
 
+## 0.10.0 项目结构与 CodeGraph 索引
+
+- 新增 [项目结构文档](docs/project-structure.md)，整理前端、Tauri 后端、IPC 边界和关键业务调用链。
+- 初始化 CodeGraph 项目配置；本地索引数据库由 `.codegraph/.gitignore` 排除，不进入版本控制。
+
 ## 0.9.0 5E 切号联动与界面精简
 
 - CFG 参数库导入、导出和添加命令提升到编辑器全局标签栏；分区标题只保留当前分区名称，窄窗口自动收起次要文字。
