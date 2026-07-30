@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   FileClock,
   FileCode2,
+  GripVertical,
   Heart,
   Info,
   LayoutGrid,
@@ -23,6 +24,7 @@ import {
 import { AppUpdateBanner } from "./components/AppUpdateBanner";
 import { flushCfgDraft } from "./cfgWorkspace";
 import { AccountDrawer } from "./components/AccountDrawer";
+import { PlatformAccountDialog } from "./components/PlatformAccountDialog";
 import { CurrentSteamStatus } from "./components/CurrentSteamStatus";
 import { SteamLoginDialog } from "./components/SteamLoginDialog";
 import { SwitchDialog } from "./components/SwitchDialog";
@@ -30,7 +32,12 @@ import { TagFilter } from "./components/TagFilter";
 import { TitleBar } from "./components/TitleBar";
 import { api } from "./lib/api";
 import { APP_ICON_PATH } from "./lib/appMeta";
-import { filterAccounts, sortAccounts } from "./lib/filter";
+import {
+  applyAccountOrder,
+  filterAccounts,
+  normalizeAccountOrder,
+  sortAccounts,
+} from "./lib/filter";
 import { applyTheme, resolveTheme, savedTheme, storedTheme } from "./lib/themes";
 import { switchResultNotice } from "./lib/switchResult";
 import type {
@@ -68,7 +75,11 @@ export default function App() {
   const [status, setStatus] = useState<CurrentStatus>();
   const [loading, setLoading] = useState(true);
   const [details, setDetails] = useState<Account>();
-  const [detailsPlatform, setDetailsPlatform] = useState<QuickPlatformCode>();
+  const [platformEditor, setPlatformEditor] = useState<{
+    account: Account;
+    platform: QuickPlatformCode;
+  }>();
+  const [accountOrder, setAccountOrder] = useState<string[]>([]);
   const [switching, setSwitching] = useState<Account>();
   const [loginSession, setLoginSession] = useState<SteamLoginSession>();
   const [theme, setTheme] = useState<Theme>(savedTheme());
@@ -85,12 +96,14 @@ export default function App() {
   const load = async () => {
     setLoading(true);
     try {
-      const [items, current, tags] = await Promise.all([
+      const [items, current, tags, settings] = await Promise.all([
         api.accounts(),
         api.status(),
         api.tags(),
+        api.settings(),
       ]);
       setAccounts(items);
+      setAccountOrder(normalizeAccountOrder(items, settings.account_order));
       setStatus(current);
       setTagOptions(tags);
     } catch (error) {
@@ -175,7 +188,7 @@ export default function App() {
     () =>
       sortAccounts(
         filterAccounts(
-          accounts,
+          applyAccountOrder(accounts, accountOrder),
           ui.query,
           ui.favoriteOnly,
           ui.platform,
@@ -183,8 +196,27 @@ export default function App() {
         ),
         ui.accountSort,
       ),
-    [accounts, ui.query, ui.favoriteOnly, ui.platform, ui.selectedTags, ui.accountSort],
+    [accounts, accountOrder, ui.query, ui.favoriteOnly, ui.platform, ui.selectedTags, ui.accountSort],
   );
+
+  const reorderAccounts = async (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    const previous = accountOrder;
+    const normalized = normalizeAccountOrder(accounts, accountOrder);
+    const sourceIndex = normalized.indexOf(sourceId);
+    const targetIndex = normalized.indexOf(targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const next = [...normalized];
+    const [moved] = next.splice(sourceIndex, 1);
+    next.splice(targetIndex, 0, moved);
+    setAccountOrder(next);
+    try {
+      await api.setSetting("account_order", next);
+    } catch (error) {
+      setAccountOrder(previous);
+      notify("error", `账号顺序保存失败：${errorMessage(error)}`);
+    }
+  };
 
   const updateTheme = (nextTheme: Theme) => {
     setTheme(nextTheme);
@@ -347,13 +379,14 @@ export default function App() {
               onScan={scan}
               onAdd={beginLogin}
               onDetails={(account) => {
-                setDetailsPlatform(undefined);
                 setDetails(account);
               }}
               onPlatform={(account, platform) => {
-                setDetailsPlatform(platform);
-                setDetails(account);
+                setPlatformEditor({ account, platform });
               }}
+              onReorder={(sourceId, targetId) =>
+                void reorderAccounts(sourceId, targetId)
+              }
               onSwitch={setSwitching}
               onFavorite={(account) =>
                 saveProfile({
@@ -392,15 +425,25 @@ export default function App() {
             accounts.find((account) => account.id === details.id) ?? details
           }
           tagOptions={tagOptions}
-          initialPlatform={detailsPlatform}
           open
           onOpenChange={(value) => {
-            if (!value) {
-              setDetails(undefined);
-              setDetailsPlatform(undefined);
-            }
+            if (!value) setDetails(undefined);
           }}
           onSave={saveProfile}
+          notify={notify}
+          onChanged={() => void load()}
+        />
+      )}
+      {platformEditor && (
+        <PlatformAccountDialog
+          account={
+            accounts.find(
+              (account) => account.id === platformEditor.account.id,
+            ) ?? platformEditor.account
+          }
+          platform={platformEditor.platform}
+          open
+          onOpenChange={(value) => !value && setPlatformEditor(undefined)}
           notify={notify}
           onChanged={() => void load()}
         />
@@ -452,6 +495,7 @@ export function AccountsPage({
   onAdd,
   onDetails,
   onPlatform,
+  onReorder,
   onSwitch,
   onFavorite,
 }: {
@@ -464,9 +508,24 @@ export function AccountsPage({
   onAdd: () => void;
   onDetails: (account: Account) => void;
   onPlatform: (account: Account, platform: QuickPlatformCode) => void;
+  onReorder: (sourceId: string, targetId: string) => void;
   onSwitch: (account: Account) => void;
   onFavorite: (account: Account) => void;
 }) {
+  const [draggingId, setDraggingId] = useState<string>();
+  const reorderEnabled =
+    !ui.query.trim() &&
+    !ui.favoriteOnly &&
+    !ui.platform &&
+    ui.selectedTags.length === 0 &&
+    ui.accountSort === "custom";
+
+  const moveByKeyboard = (account: Account, offset: -1 | 1) => {
+    const index = accounts.findIndex((item) => item.id === account.id);
+    const target = accounts[index + offset];
+    if (target) onReorder(account.steamId64, target.steamId64);
+  };
+
   return (
     <section>
       <header className="page-heading account-heading">
@@ -507,13 +566,13 @@ export function AccountsPage({
             value={ui.accountSort}
             onChange={(event) =>
               ui.setAccountSort(
-                event.target.value as "score_desc" | "score_asc" | "recent",
+                event.target.value as "score_desc" | "score_asc" | "custom",
               )
             }
           >
-            <option value="score_desc">分数从高到低</option>
             <option value="score_asc">分数从低到高</option>
-            <option value="recent">最近切换</option>
+            <option value="score_desc">分数从高到低</option>
+            <option value="custom">自定义顺序</option>
           </select>
         )}
         <TagFilter
@@ -559,41 +618,71 @@ export function AccountsPage({
         <section className="account-list">
           {accounts.map((account) => (
             <article
-              className="account-row clickable"
+              className={`account-row clickable${
+                draggingId === account.steamId64 ? " dragging" : ""
+              }`}
               key={account.id}
+              draggable={reorderEnabled}
+              onDragStart={(event) => {
+                if (!reorderEnabled) return;
+                setDraggingId(account.steamId64);
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", account.steamId64);
+              }}
+              onDragOver={(event) => {
+                if (reorderEnabled) event.preventDefault();
+              }}
+              onDrop={(event) => {
+                if (!reorderEnabled) return;
+                event.preventDefault();
+                const sourceId =
+                  event.dataTransfer.getData("text/plain") || draggingId;
+                if (sourceId) onReorder(sourceId, account.steamId64);
+                setDraggingId(undefined);
+              }}
+              onDragEnd={() => setDraggingId(undefined)}
               onClick={() => onDetails(account)}
             >
+              <button
+                type="button"
+                className="account-drag-handle"
+                disabled={!reorderEnabled}
+                aria-label={`调整 ${account.personaName || "未命名 Steam 账号"} 的顺序`}
+                title={
+                  reorderEnabled
+                    ? "拖拽排序；也可按 Alt + ↑/↓"
+                    : "清除筛选后可调整顺序"
+                }
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                  if (!reorderEnabled || !event.altKey) return;
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    moveByKeyboard(account, -1);
+                  } else if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    moveByKeyboard(account, 1);
+                  }
+                }}
+              >
+                <GripVertical />
+              </button>
               <div className="account-identity">
                 <AccountAvatar account={account} />
                 <div className="account-main">
                   <div className="account-title">
                     <h2>
                       {account.personaName ||
-                        account.alias ||
-                        account.accountName ||
-                        "未命名账号"}
+                        "未命名 Steam 账号"}
                     </h2>
                     {account.favorite && <Star className="favorite" />}
                   </div>
-                  <small>{account.accountName || "未提供 Steam 登录名"}</small>
                 </div>
-              </div>
-              <div className="account-context">
-                <span className="remark" title={account.remark}>
-                  {account.remark || "暂无备注"}
-                </span>
-                <div className="metadata-row">
-                  <div className="tags">
-                    {account.tags.map((tag) => (
-                      <span key={tag}>{tag}</span>
-                    ))}
-                  </div>
-                </div>
-                <small>最近切换 {formatTime(account.lastSwitchedAt)}</small>
               </div>
               <div className="account-platform-status">
                 <AccountPlatformBadges
                   account={account}
+                  showFiveEScore={ui.platform === "5e"}
                   onSelect={(platform) => onPlatform(account, platform)}
                 />
               </div>

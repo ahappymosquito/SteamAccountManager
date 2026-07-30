@@ -1,9 +1,10 @@
-/** Regression tests for account platform badges and current Steam identity copy. */
+/** Regression coverage for compact platform shortcuts and Steam identity copy. */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { Account } from "../lib/types";
 import { AccountPlatformBadges } from "./AccountPlatformBadges";
 import { CurrentSteamStatus } from "./CurrentSteamStatus";
-import type { Account } from "../lib/types";
 
 const account: Account = {
   id: "account-1",
@@ -15,50 +16,55 @@ const account: Account = {
   favorite: false,
   tags: [],
   platformCodes: ["5e", "perfectworld"],
+  platformSummaries: [
+    { platformCode: "5e", displayName: "很长的5E用户名" },
+    { platformCode: "perfectworld", displayName: "完美玩家" },
+  ],
   playerRanks: [
-    { platform: "5e", rankName: "S", score: 2401.1, stale: false },
-    { platform: "perfectworld", rankName: "B+", stale: false },
+    {
+      platform: "5e",
+      rankName: "S",
+      score: 2401.1,
+      rankingState: "ranked",
+      stale: false,
+    },
   ],
 };
 
 afterEach(cleanup);
 
 describe("account presentation", () => {
-  it("shows platform name, rank and available score without duplicate lookup copy", () => {
-    render(<AccountPlatformBadges account={account} />);
-
+  it("shows only platform and username until the 5E filter requests score", () => {
+    const { rerender } = render(<AccountPlatformBadges account={account} />);
     expect(screen.getByRole("button", { name: "编辑5E账号资料" }))
-      .toHaveTextContent("5ES · 2401");
-    expect(screen.getByRole("button", { name: "编辑完美平台账号资料" }))
-      .toHaveTextContent("完美平台B+");
+      .toHaveTextContent("5E很长的5E用户名");
+    expect(screen.queryByText("2401")).not.toBeInTheDocument();
+
+    rerender(<AccountPlatformBadges account={account} showFiveEScore />);
+    expect(screen.getByText("2401")).toBeInTheDocument();
   });
 
-  it("hides unlinked platform shortcuts from the account row", () => {
-    const onSelect = vi.fn();
+  it("keeps unlinked shortcuts gray without showing pending copy", () => {
     render(
       <AccountPlatformBadges
-        account={{ ...account, platformCodes: [], playerRanks: [] }}
-        onSelect={onSelect}
+        account={{ ...account, platformCodes: [], platformSummaries: [] }}
       />,
     );
-
     expect(screen.queryByText(/待填写/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "编辑5E账号资料" }))
-      .not.toBeInTheDocument();
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "编辑5E账号资料" }))
+      .toHaveClass("unlinked");
+    expect(screen.getByRole("button", { name: "编辑完美账号资料" }))
+      .toHaveClass("unlinked");
   });
 
-  it("highlights a linked platform and reports the selected platform", () => {
+  it("reports a selected platform from filled or empty shortcuts", () => {
     const onSelect = vi.fn();
     render(<AccountPlatformBadges account={account} onSelect={onSelect} />);
-
-    const shortcut = screen.getByRole("button", { name: "编辑5E账号资料" });
-    expect(shortcut).toHaveClass("linked");
-    fireEvent.click(shortcut);
+    fireEvent.click(screen.getByRole("button", { name: "编辑5E账号资料" }));
     expect(onSelect).toHaveBeenCalledWith("5e");
   });
 
-  it("shows placement progress without exposing a temporary score", () => {
+  it("shows placement progress only in the 5E filtered context", () => {
     render(
       <AccountPlatformBadges
         account={{
@@ -72,10 +78,10 @@ describe("account presentation", () => {
             stale: false,
           }],
         }}
+        showFiveEScore
       />,
     );
-
-    expect(screen.getByText("定级赛 · 已打 3 场")).toBeInTheDocument();
+    expect(screen.getByText("未定级 · 已打 3 场")).toBeInTheDocument();
     expect(screen.queryByText("2200")).not.toBeInTheDocument();
   });
 
@@ -91,7 +97,6 @@ describe("account presentation", () => {
         }}
       />,
     );
-
     expect(screen.getByText("中文昵称")).toBeInTheDocument();
     expect(screen.queryByText("login_name")).not.toBeInTheDocument();
   });

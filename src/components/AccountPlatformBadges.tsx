@@ -1,78 +1,79 @@
-/** Fixed platform shortcuts and compact legacy-platform badges for account rows. */
+/** Fixed, compact Perfect World and 5E account shortcuts for Steam rows. */
 import type { Account, PlatformCode } from "../lib/types";
 
 const platformLabels: Record<PlatformCode, string> = {
-  perfectworld: "完美平台",
+  perfectworld: "完美",
   "5e": "5E",
   faceit: "FACEIT",
   other: "其他",
 };
 export type QuickPlatformCode = "perfectworld" | "5e";
 
-const platformBadgeDetails = (account: Account, code: PlatformCode) => {
-  const rank = account.playerRanks?.find((item) => item.platform === code);
+const platformAccountName = (account: Account, code: PlatformCode) => {
   const summary = account.platformSummaries?.find(
     (item) => item.platformCode === code,
   );
-  const ranking = rank?.rankingState === "placement"
-    ? ["定级赛", rank.placementMatches === undefined ? undefined : `已打 ${rank.placementMatches} 场`]
-    : [
-        rank?.rankName,
-        rank?.score === undefined ? undefined : Math.round(rank.score).toString(),
-      ];
-  return [
-    summary?.displayName || summary?.externalId,
-    ...ranking,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  return summary?.displayName || summary?.externalId;
+};
+
+const fiveERankingText = (account: Account) => {
+  const rank = account.playerRanks?.find((item) => item.platform === "5e");
+  if (rank?.rankingState === "placement") {
+    return `未定级${
+      rank.placementMatches === undefined ? "" : ` · 已打 ${rank.placementMatches} 场`
+    }`;
+  }
+  if (rank?.rankingState === "ranked" && rank.score !== undefined) {
+    return Math.round(rank.score).toString();
+  }
+  return "未定级";
 };
 
 export const platformBadgeText = (account: Account, code: PlatformCode) =>
-  [platformLabels[code] ?? code, platformBadgeDetails(account, code)]
+  [platformLabels[code] ?? code, platformAccountName(account, code)]
     .filter(Boolean)
     .join(" · ");
 
 export function AccountPlatformBadges({
   account,
   onSelect,
+  showFiveEScore = false,
 }: {
   account: Account;
   onSelect?: (code: QuickPlatformCode) => void;
+  showFiveEScore?: boolean;
 }) {
   const fixedPlatforms: QuickPlatformCode[] = ["perfectworld", "5e"];
-  const linkedFixedPlatforms = fixedPlatforms.filter((code) =>
-    account.platformCodes.includes(code),
-  );
-  const legacyPlatforms = (account.platformCodes ?? []).filter(
-    (code) => !fixedPlatforms.includes(code as QuickPlatformCode),
-  );
   return (
     <div className="platform-badges">
-      {linkedFixedPlatforms.map((code) => (
-        <button
-          type="button"
-          className="platform-badge platform-shortcut linked"
-          key={code}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSelect?.(code);
-          }}
-          aria-label={`编辑${platformLabels[code]}账号资料`}
-        >
-          <span className="platform-badge-label">{platformLabels[code]}</span>
-          {platformBadgeDetails(account, code) && (
-            <span className="platform-badge-detail">
-              {platformBadgeDetails(account, code)}
-            </span>
-          )}
-        </button>
-      ))}
-      {legacyPlatforms.map((code) => (
-        <span className="platform-badge" key={code}>
-          {platformBadgeText(account, code)}
-        </span>
-      ))}
+      {fixedPlatforms.map((code) => {
+        const linked = account.platformCodes.includes(code);
+        const name = platformAccountName(account, code);
+        const title = [platformLabels[code], name].filter(Boolean).join(" · ");
+        return (
+          <button
+            type="button"
+            className={`platform-badge platform-shortcut${
+              linked ? " linked" : " unlinked"
+            }`}
+            key={code}
+            title={title}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect?.(code);
+            }}
+            aria-label={`编辑${platformLabels[code]}账号资料`}
+          >
+            <span className="platform-badge-label">{platformLabels[code]}</span>
+            {linked && name && (
+              <span className="platform-badge-detail">{name}</span>
+            )}
+            {linked && code === "5e" && showFiveEScore && (
+              <span className="platform-score">{fiveERankingText(account)}</span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }

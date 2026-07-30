@@ -57,7 +57,7 @@ describe("AccountsPage ranking controls", () => {
     query: "",
     favoriteOnly: false,
     platform: "5e" as const,
-    accountSort: "score_desc" as const,
+    accountSort: "score_asc" as const,
     selectedTags: [],
     notice: null,
     setPage: vi.fn(),
@@ -78,6 +78,7 @@ describe("AccountsPage ranking controls", () => {
     onAdd: vi.fn(),
     onDetails: vi.fn(),
     onPlatform: vi.fn(),
+    onReorder: vi.fn(),
     onSwitch: vi.fn(),
     onFavorite: vi.fn(),
   };
@@ -86,15 +87,44 @@ describe("AccountsPage ranking controls", () => {
     const { rerender } = render(<AccountsPage {...props} />);
 
     expect(screen.getByRole("combobox", { name: "5E 账号排序" }))
-      .toHaveValue("score_desc");
+      .toHaveValue("score_asc");
 
     rerender(
       <AccountsPage
         {...props}
-        ui={{ ...ui, platform: "", accountSort: "recent" }}
+        ui={{ ...ui, platform: "", accountSort: "custom" }}
       />,
     );
     expect(screen.queryByRole("combobox", { name: "5E 账号排序" }))
       .not.toBeInTheDocument();
+  });
+
+  it("enables keyboard reordering only for the clean custom list", () => {
+    const onReorder = vi.fn();
+    const second = {
+      ...account,
+      id: "2",
+      steamId64: "76561198000000002",
+      personaName: "Second",
+    };
+    render(
+      <AccountsPage
+        {...props}
+        accounts={[account, second]}
+        ui={{ ...ui, platform: "", accountSort: "custom" }}
+        onReorder={onReorder}
+      />,
+    );
+
+    const handle = screen.getByRole("button", {
+      name: "调整 Player 的顺序",
+    });
+    expect(handle).toBeEnabled();
+    fireEvent.keyDown(handle, { key: "ArrowDown", altKey: true });
+    expect(onReorder).toHaveBeenCalledWith(
+      account.steamId64,
+      second.steamId64,
+    );
+    expect(screen.queryByText("alpha")).not.toBeInTheDocument();
   });
 });

@@ -55,7 +55,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 
 - `src/main.tsx`：React 根入口，恢复主题并安装 Radix Tooltip Provider。
 - `src/App.tsx`：应用壳和主要用例编排；持有账号、当前 Steam 状态、登录会话、主题与更新状态，按 `useUi.page` 切换页面。
-- `src/store.ts`：Zustand UI 状态，管理页面、搜索、收藏、平台、标签和通知。
+- `src/store.ts`：Zustand UI 状态，管理页面、搜索、收藏、平台、5E 排序、标签和通知；账号自定义顺序持久化在后端普通设置中。
 - `src/cfgWorkspace.ts`：CFG 草稿状态与串行保存；账号切换前由 `flushCfgDraft()` 保证草稿落盘。
 
 ### 页面
@@ -67,7 +67,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 
 ### 组件
 
-- 账号域：`AccountDrawer`、`AccountAvatar`、`AccountPlatformBadges`、`PlayerDataPanel`。
+- 账号域：`AccountDrawer`、`PlatformAccountDialog`、`AccountAvatar`、`AccountPlatformBadges`、`PlayerDataPanel`。平台编辑由独立弹窗负责，详情抽屉仅以可展开卡片展示平台资料和战绩。
 - Steam 域：`CurrentSteamStatus`、`SteamLoginDialog`、`SwitchDialog`。
 - CFG 域：`CrosshairPreview`、`TagFilter`。
 - 应用壳：`TitleBar`、`AppUpdateBanner`。
