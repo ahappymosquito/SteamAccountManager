@@ -16,7 +16,10 @@ import {
 } from "lucide-react";
 
 import { AccountAvatar } from "./components/AccountAvatar";
-import { AccountPlatformBadges } from "./components/AccountPlatformBadges";
+import {
+  AccountPlatformBadges,
+  type QuickPlatformCode,
+} from "./components/AccountPlatformBadges";
 import { AppUpdateBanner } from "./components/AppUpdateBanner";
 import { flushCfgDraft } from "./cfgWorkspace";
 import { AccountDrawer } from "./components/AccountDrawer";
@@ -65,6 +68,7 @@ export default function App() {
   const [status, setStatus] = useState<CurrentStatus>();
   const [loading, setLoading] = useState(true);
   const [details, setDetails] = useState<Account>();
+  const [detailsPlatform, setDetailsPlatform] = useState<QuickPlatformCode>();
   const [switching, setSwitching] = useState<Account>();
   const [loginSession, setLoginSession] = useState<SteamLoginSession>();
   const [theme, setTheme] = useState<Theme>(savedTheme());
@@ -339,7 +343,14 @@ export default function App() {
               ui={ui}
               onScan={scan}
               onAdd={beginLogin}
-              onDetails={setDetails}
+              onDetails={(account) => {
+                setDetailsPlatform(undefined);
+                setDetails(account);
+              }}
+              onPlatform={(account, platform) => {
+                setDetailsPlatform(platform);
+                setDetails(account);
+              }}
               onSwitch={setSwitching}
               onFavorite={(account) =>
                 saveProfile({
@@ -378,8 +389,14 @@ export default function App() {
             accounts.find((account) => account.id === details.id) ?? details
           }
           tagOptions={tagOptions}
+          initialPlatform={detailsPlatform}
           open
-          onOpenChange={(value) => !value && setDetails(undefined)}
+          onOpenChange={(value) => {
+            if (!value) {
+              setDetails(undefined);
+              setDetailsPlatform(undefined);
+            }
+          }}
           onSave={saveProfile}
           notify={notify}
           onChanged={() => void load()}
@@ -431,6 +448,7 @@ function AccountsPage({
   onScan,
   onAdd,
   onDetails,
+  onPlatform,
   onSwitch,
   onFavorite,
 }: {
@@ -442,6 +460,7 @@ function AccountsPage({
   onScan: () => void;
   onAdd: () => void;
   onDetails: (account: Account) => void;
+  onPlatform: (account: Account, platform: QuickPlatformCode) => void;
   onSwitch: (account: Account) => void;
   onFavorite: (account: Account) => void;
 }) {
@@ -537,7 +556,10 @@ function AccountsPage({
                   {account.favorite && <Star className="favorite" />}
                 </div>
                 <div className="metadata-row">
-                  <AccountPlatformBadges account={account} />
+                  <AccountPlatformBadges
+                    account={account}
+                    onSelect={(platform) => onPlatform(account, platform)}
+                  />
                   <div className="tags">
                     {account.tags.map((tag) => (
                       <span key={tag}>{tag}</span>

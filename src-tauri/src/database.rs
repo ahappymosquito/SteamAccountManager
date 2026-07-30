@@ -2,15 +2,55 @@
 use crate::error::{AppError, AppResult};
 use crate::models::{
     Account, AccountCfgAssignment, CfgProfile, LocalSteamAccount, PlatformApp, PlatformLink,
-    PlatformLinkInput, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption,
+    PlatformLinkInput, PlatformSummary, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{
+    params, params_from_iter,
+    types::{Value as SqlValue, ValueRef},
+    Connection, OptionalExtension,
+};
+use serde_json::{json, Map, Value};
 use std::path::Path;
 use uuid::Uuid;
 
 pub struct Database(pub Mutex<Connection>);
+
+const BACKUP_TABLES: [&str; 12] = [
+    "steam_accounts",
+    "account_profiles",
+    "tags",
+    "account_tags",
+    "platform_accounts",
+    "account_platform_links",
+    "app_settings",
+    "platform_apps",
+    "cfg_profiles",
+    "cfg_profile_versions",
+    "account_cfg_profiles",
+    "account_cfg_deployments",
+];
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> AppResult<bool> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(columns.iter().any(|candidate| candidate == column))
+}
+
+fn ensure_platform_credential_columns(conn: &Connection) -> AppResult<()> {
+    for column in ["login_account", "login_password"] {
+        if !has_column(conn, "platform_accounts", column)? {
+            conn.execute(
+                &format!("ALTER TABLE platform_accounts ADD COLUMN {column} TEXT"),
+                [],
+            )?;
+        }
+    }
+    Ok(())
+}
 
 fn cfg_profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CfgProfile> {
     Ok(CfgProfile {
@@ -23,6 +63,170 @@ fn cfg_profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CfgProfile>
     })
 }
 
+fn table_columns(conn: &Connection, table: &str) -> AppResult<Vec<String>> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement
+        .query_map([], |row| row.get(1))?
+        .collect::<Result<_, _>>()?;
+    Ok(columns)
+}
+
+fn sqlite_value_to_json(value: ValueRef<'_>) -> AppResult<Value> {
+    Ok(match value {
+        ValueRef::Null => Value::Null,
+        ValueRef::Integer(value) => json!(value),
+        ValueRef::Real(value) => json!(value),
+        ValueRef::Text(value) => Value::String(String::from_utf8_lossy(value).into_owned()),
+        ValueRef::Blob(_) => {
+            return Err(AppError::new(
+                "BACKUP_UNSUPPORTED_VALUE",
+                "业务数据包含无法导出的二进制字段",
+            ))
+        }
+    })
+}
+
+fn json_value_to_sql(value: &Value) -> AppResult<SqlValue> {
+    match value {
+        Value::Null => Ok(SqlValue::Null),
+        Value::Bool(value) => Ok(SqlValue::Integer(i64::from(*value))),
+        Value::Number(value) if value.is_i64() => {
+            Ok(SqlValue::Integer(value.as_i64().expect("checked integer")))
+        }
+        Value::Number(value) if value.is_u64() => {
+            let value = value
+                .as_u64()
+                .and_then(|value| i64::try_from(value).ok())
+                .ok_or_else(|| AppError::new("BACKUP_INVALID", "备份文件包含超范围整数"))?;
+            Ok(SqlValue::Integer(value))
+        }
+        Value::Number(value) => {
+            Ok(SqlValue::Real(value.as_f64().ok_or_else(|| {
+                AppError::new("BACKUP_INVALID", "备份文件包含无效数字")
+            })?))
+        }
+        Value::String(value) => Ok(SqlValue::Text(value.clone())),
+        _ => Err(AppError::new(
+            "BACKUP_INVALID",
+            "备份记录字段只能是文本、数字、布尔值或空值",
+        )),
+    }
+}
+
+fn dump_table(conn: &Connection, table: &str) -> AppResult<Value> {
+    let columns = table_columns(conn, table)?;
+    let where_clause = if table == "app_settings" {
+        " WHERE key NOT LIKE 'credential.%'"
+    } else {
+        ""
+    };
+    let mut statement = conn.prepare(&format!("SELECT * FROM {table}{where_clause}"))?;
+    let rows = statement.query_map([], |row| {
+        let mut object = Map::new();
+        for (index, column) in columns.iter().enumerate() {
+            object.insert(
+                column.clone(),
+                sqlite_value_to_json(row.get_ref(index)?)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            );
+        }
+        Ok(Value::Object(object))
+    })?;
+    Ok(Value::Array(rows.collect::<Result<_, _>>()?))
+}
+
+fn backup_document(conn: &Connection) -> AppResult<Value> {
+    let mut tables = Map::new();
+    for table in BACKUP_TABLES {
+        tables.insert(table.to_string(), dump_table(conn, table)?);
+    }
+    Ok(json!({
+        "schemaVersion": 2,
+        "exportedAt": Utc::now().to_rfc3339(),
+        "tables": tables,
+    }))
+}
+
+fn backup_tables(document: &Value) -> AppResult<&Map<String, Value>> {
+    if document.get("schemaVersion").and_then(Value::as_u64) != Some(2) {
+        return Err(AppError::new(
+            "BACKUP_VERSION_UNSUPPORTED",
+            "仅支持版本 2 的 Steam Account Manager 备份文件",
+        ));
+    }
+    let tables = document
+        .get("tables")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::new("BACKUP_INVALID", "备份文件缺少 tables 对象"))?;
+    for table in BACKUP_TABLES {
+        if !tables.get(table).is_some_and(Value::is_array) {
+            return Err(AppError::new(
+                "BACKUP_INVALID",
+                format!("备份文件缺少 {table} 数据"),
+            ));
+        }
+    }
+    Ok(tables)
+}
+
+fn insert_backup_table(
+    tx: &rusqlite::Transaction<'_>,
+    table: &str,
+    allowed_columns: &[String],
+    records: &[Value],
+) -> AppResult<()> {
+    for record in records {
+        let object = record
+            .as_object()
+            .ok_or_else(|| AppError::new("BACKUP_INVALID", "备份表记录必须是对象"))?;
+        if object
+            .keys()
+            .any(|column| !allowed_columns.iter().any(|allowed| allowed == column))
+        {
+            return Err(AppError::new(
+                "BACKUP_INVALID",
+                format!("备份文件的 {table} 表包含未知字段"),
+            ));
+        }
+        if table == "app_settings"
+            && object
+                .get("key")
+                .and_then(Value::as_str)
+                .is_some_and(|key| key.starts_with("credential."))
+        {
+            return Err(AppError::new(
+                "BACKUP_INVALID",
+                "备份文件不得包含平台查询 Token 状态",
+            ));
+        }
+        let columns: Vec<_> = allowed_columns
+            .iter()
+            .filter(|column| object.contains_key(column.as_str()))
+            .collect();
+        if columns.is_empty() {
+            return Err(AppError::new("BACKUP_INVALID", "备份记录不包含可恢复字段"));
+        }
+        let placeholders = (1..=columns.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "INSERT INTO {table}({}) VALUES({placeholders})",
+            columns
+                .iter()
+                .map(|column| column.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let values = columns
+            .iter()
+            .map(|column| json_value_to_sql(&object[column.as_str()]))
+            .collect::<AppResult<Vec<_>>>()?;
+        tx.execute(&sql, params_from_iter(values))?;
+    }
+    Ok(())
+}
+
 impl Database {
     pub fn open(path: &Path) -> AppResult<Self> {
         let mut conn = Connection::open(path)?;
@@ -31,9 +235,74 @@ impl Database {
         let tx = conn.transaction()?;
         tx.execute_batch(include_str!("../migrations/001_init.sql"))?;
         tx.commit()?;
+        ensure_platform_credential_columns(&conn)?;
         let database = Self(Mutex::new(conn));
         database.ensure_active_cfg_profile()?;
         Ok(database)
+    }
+
+    pub fn export_backup(&self) -> AppResult<Value> {
+        backup_document(&self.0.lock())
+    }
+
+    pub fn preview_backup(document: &Value) -> AppResult<crate::models::ImportPreview> {
+        let tables = backup_tables(document)?;
+        let count = |table: &str| {
+            tables
+                .get(table)
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len)
+        };
+        Ok(crate::models::ImportPreview {
+            schema_version: 2,
+            exported_at: document
+                .get("exportedAt")
+                .and_then(Value::as_str)
+                .unwrap_or("未知时间")
+                .to_string(),
+            account_count: count("steam_accounts"),
+            platform_link_count: count("account_platform_links"),
+            cfg_profile_count: count("cfg_profiles"),
+        })
+    }
+
+    pub fn restore_backup(&self, document: &Value) -> AppResult<crate::models::ImportPreview> {
+        let preview = Self::preview_backup(document)?;
+        let tables = backup_tables(document)?;
+        let mut conn = self.0.lock();
+        let columns = BACKUP_TABLES
+            .iter()
+            .map(|table| Ok((*table, table_columns(&conn, table)?)))
+            .collect::<AppResult<Vec<_>>>()?;
+        let tx = conn.transaction()?;
+        tx.pragma_update(None, "defer_foreign_keys", "ON")?;
+        tx.execute_batch(
+            "DELETE FROM switch_logs;
+             DELETE FROM player_snapshot_cache;
+             DELETE FROM account_cfg_deployments;
+             DELETE FROM account_cfg_profiles;
+             DELETE FROM cfg_profile_versions;
+             DELETE FROM cfg_profiles;
+             DELETE FROM account_platform_links;
+             DELETE FROM platform_accounts;
+             DELETE FROM account_tags;
+             DELETE FROM tags;
+             DELETE FROM account_profiles;
+             DELETE FROM steam_accounts;
+             DELETE FROM platform_apps;
+             DELETE FROM app_settings WHERE key NOT LIKE 'credential.%';",
+        )?;
+        for (table, allowed_columns) in columns {
+            let records = tables
+                .get(table)
+                .and_then(Value::as_array)
+                .expect("validated backup table");
+            insert_backup_table(&tx, table, &allowed_columns, records)?;
+        }
+        tx.commit()?;
+        drop(conn);
+        self.ensure_active_cfg_profile()?;
+        Ok(preview)
     }
 
     pub fn sync_accounts(&self, incoming: &[LocalSteamAccount]) -> AppResult<usize> {
@@ -86,6 +355,7 @@ impl Database {
                 favorite: r.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
                 tags: Vec::new(),
                 platform_codes: Vec::new(),
+                platform_summaries: Vec::new(),
                 player_ranks: Vec::new(),
                 avatar_path: None,
             })
@@ -99,6 +369,22 @@ impl Database {
             let mut platforms = conn.prepare("SELECT DISTINCT p.platform_code FROM platform_accounts p JOIN account_platform_links l ON l.platform_account_id=p.id WHERE l.steam_account_id=?1 ORDER BY p.platform_code")?;
             account.platform_codes = platforms
                 .query_map([&account.id], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            let mut summaries = conn.prepare(
+                "SELECT p.platform_code,p.display_name,p.external_id
+                 FROM platform_accounts p
+                 JOIN account_platform_links l ON l.platform_account_id=p.id
+                 WHERE l.steam_account_id=?1
+                 ORDER BY p.platform_code",
+            )?;
+            account.platform_summaries = summaries
+                .query_map([&account.id], |row| {
+                    Ok(PlatformSummary {
+                        platform_code: row.get(0)?,
+                        display_name: row.get(1)?,
+                        external_id: row.get(2)?,
+                    })
+                })?
                 .collect::<Result<_, _>>()?;
             let mut ranks = conn.prepare(
                 "SELECT p.platform_code,c.snapshot_json,c.expires_at
@@ -231,7 +517,7 @@ impl Database {
 
     pub fn list_links(&self, steam_account_id: &str) -> AppResult<Vec<PlatformLink>> {
         let conn = self.0.lock();
-        let mut stmt=conn.prepare("SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.remark,p.status,p.last_verified_at FROM account_platform_links l JOIN platform_accounts p ON p.id=l.platform_account_id WHERE l.steam_account_id=?1 ORDER BY p.platform_code")?;
+        let mut stmt=conn.prepare("SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.login_account,p.login_password,p.remark,p.status,p.last_verified_at FROM account_platform_links l JOIN platform_accounts p ON p.id=l.platform_account_id WHERE l.steam_account_id=?1 ORDER BY p.platform_code")?;
         let links = stmt
             .query_map([steam_account_id], |r| {
                 Ok(PlatformLink {
@@ -241,9 +527,11 @@ impl Database {
                     external_id: r.get(3)?,
                     display_name: r.get(4)?,
                     profile_url: r.get(5)?,
-                    remark: r.get(6)?,
-                    status: r.get(7)?,
-                    last_verified_at: r.get(8)?,
+                    login_account: r.get(6)?,
+                    login_password: r.get(7)?,
+                    remark: r.get(8)?,
+                    status: r.get(9)?,
+                    last_verified_at: r.get(10)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -253,7 +541,7 @@ impl Database {
     pub fn refreshable_five_e_links(&self) -> AppResult<Vec<PlatformLink>> {
         let conn = self.0.lock();
         let mut stmt = conn.prepare(
-            "SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.remark,p.status,p.last_verified_at
+            "SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.login_account,p.login_password,p.remark,p.status,p.last_verified_at
              FROM account_platform_links l
              JOIN platform_accounts p ON p.id=l.platform_account_id
              WHERE p.platform_code='5e' AND TRIM(COALESCE(p.external_id,''))<>''
@@ -268,9 +556,11 @@ impl Database {
                     external_id: row.get(3)?,
                     display_name: row.get(4)?,
                     profile_url: row.get(5)?,
-                    remark: row.get(6)?,
-                    status: row.get(7)?,
-                    last_verified_at: row.get(8)?,
+                    login_account: row.get(6)?,
+                    login_password: row.get(7)?,
+                    remark: row.get(8)?,
+                    status: row.get(9)?,
+                    last_verified_at: row.get(10)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -320,7 +610,7 @@ impl Database {
             )
             .optional()?;
         let platform_id = platform_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-        tx.execute("INSERT INTO platform_accounts(id,platform_code,external_id,display_name,profile_url,remark,status,binding_method,last_verified_at,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'manual',CASE WHEN ?7='user_confirmed' THEN ?8 ELSE NULL END,?8,?8) ON CONFLICT(id) DO UPDATE SET platform_code=excluded.platform_code,external_id=excluded.external_id,display_name=excluded.display_name,profile_url=excluded.profile_url,remark=excluded.remark,status=excluded.status,last_verified_at=CASE WHEN excluded.status='user_confirmed' THEN excluded.updated_at ELSE platform_accounts.last_verified_at END,updated_at=excluded.updated_at",params![platform_id,input.platform_code,input.external_id,input.display_name,input.profile_url,input.remark,input.status,now])?;
+        tx.execute("INSERT INTO platform_accounts(id,platform_code,external_id,display_name,profile_url,login_account,login_password,remark,status,binding_method,last_verified_at,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'manual',CASE WHEN ?9='user_confirmed' THEN ?10 ELSE NULL END,?10,?10) ON CONFLICT(id) DO UPDATE SET platform_code=excluded.platform_code,external_id=excluded.external_id,display_name=excluded.display_name,profile_url=excluded.profile_url,login_account=excluded.login_account,login_password=excluded.login_password,remark=excluded.remark,status=excluded.status,last_verified_at=CASE WHEN excluded.status='user_confirmed' THEN excluded.updated_at ELSE platform_accounts.last_verified_at END,updated_at=excluded.updated_at",params![platform_id,input.platform_code,input.external_id,input.display_name,input.profile_url,input.login_account,input.login_password,input.remark,input.status,now])?;
         tx.execute("INSERT INTO account_platform_links(id,steam_account_id,platform_account_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?4) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at",params![link_id,input.steam_account_id,platform_id,now])?;
         let normalize = |value: Option<&str>| {
             value
@@ -363,7 +653,7 @@ impl Database {
         let conn = self.0.lock();
         Ok(conn
             .query_row(
-                "SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.remark,p.status,p.last_verified_at FROM account_platform_links l JOIN platform_accounts p ON p.id=l.platform_account_id WHERE l.id=?1",
+                "SELECT l.id,l.steam_account_id,p.platform_code,p.external_id,p.display_name,p.profile_url,p.login_account,p.login_password,p.remark,p.status,p.last_verified_at FROM account_platform_links l JOIN platform_accounts p ON p.id=l.platform_account_id WHERE l.id=?1",
                 [id],
                 |r| {
                     Ok(PlatformLink {
@@ -373,9 +663,11 @@ impl Database {
                         external_id: r.get(3)?,
                         display_name: r.get(4)?,
                         profile_url: r.get(5)?,
-                        remark: r.get(6)?,
-                        status: r.get(7)?,
-                        last_verified_at: r.get(8)?,
+                        login_account: r.get(6)?,
+                        login_password: r.get(7)?,
+                        remark: r.get(8)?,
+                        status: r.get(9)?,
+                        last_verified_at: r.get(10)?,
                     })
                 },
             )
@@ -834,6 +1126,8 @@ mod tests {
                 external_id: None,
                 display_name: None,
                 profile_url: None,
+                login_account: None,
+                login_password: None,
                 remark: None,
                 status: "unverified".into(),
             })
@@ -859,6 +1153,8 @@ mod tests {
             external_id: Some("123456".into()),
             display_name: None,
             profile_url: None,
+            login_account: Some("five-user".into()),
+            login_password: Some("plain-password".into()),
             remark: None,
             status: "user_confirmed".into(),
         })
@@ -888,6 +1184,8 @@ mod tests {
             external_id: Some("654321".into()),
             display_name: Some("新玩家".into()),
             profile_url: None,
+            login_account: Some("five-user".into()),
+            login_password: Some("plain-password".into()),
             remark: None,
             status: "unverified".into(),
         })
@@ -917,6 +1215,8 @@ mod tests {
                 external_id: external_id.map(str::to_string),
                 display_name: None,
                 profile_url: None,
+                login_account: None,
+                login_password: None,
                 remark: None,
                 status: "unverified".into(),
             })
@@ -1013,5 +1313,117 @@ mod tests {
                 .code,
             "CFG_PROFILE_NOT_FOUND"
         );
+    }
+
+    #[test]
+    fn existing_database_receives_plaintext_platform_credential_columns() {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = temp.path().join("legacy.db");
+        let connection = Connection::open(&path).expect("legacy database");
+        connection
+            .execute_batch(
+                "CREATE TABLE platform_accounts (
+                    id TEXT PRIMARY KEY,
+                    platform_code TEXT NOT NULL,
+                    external_id TEXT,
+                    display_name TEXT,
+                    profile_url TEXT,
+                    remark TEXT,
+                    status TEXT NOT NULL DEFAULT 'unverified',
+                    binding_method TEXT NOT NULL DEFAULT 'manual',
+                    last_verified_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );",
+            )
+            .expect("legacy schema");
+        drop(connection);
+
+        let db = Database::open(&path).expect("migrated database");
+        let connection = db.0.lock();
+        assert!(
+            has_column(&connection, "platform_accounts", "login_account").expect("account column")
+        );
+        assert!(
+            has_column(&connection, "platform_accounts", "login_password")
+                .expect("password column")
+        );
+    }
+
+    #[test]
+    fn backup_round_trip_includes_platform_passwords_and_excludes_runtime_data() {
+        let source_dir = tempfile::tempdir().expect("source");
+        let source = Database::open(&source_dir.path().join("source.db")).expect("source db");
+        source
+            .sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
+        let account = source.list_accounts().expect("account").remove(0);
+        source
+            .save_link(&PlatformLinkInput {
+                id: Some("five-link".into()),
+                steam_account_id: account.id,
+                platform_code: "5e".into(),
+                external_id: Some("查询昵称".into()),
+                display_name: Some("查询昵称".into()),
+                profile_url: None,
+                login_account: Some("five-login".into()),
+                login_password: Some("plain-password".into()),
+                remark: Some("需要短信验证".into()),
+                status: "unverified".into(),
+            })
+            .expect("platform credentials");
+        source
+            .set_setting("theme", "\"glacier\"")
+            .expect("normal setting");
+        source
+            .set_setting("credential.5e.expired", "true")
+            .expect("credential state");
+
+        let document = source.export_backup().expect("export");
+        let serialized = serde_json::to_string(&document).expect("serialize");
+        assert!(serialized.contains("plain-password"));
+        assert!(!serialized.contains("credential.5e.expired"));
+        assert!(!serialized.contains("player_snapshot_cache"));
+        assert!(!serialized.contains("switch_logs"));
+        let preview = Database::preview_backup(&document).expect("preview");
+        assert_eq!(preview.account_count, 1);
+        assert_eq!(preview.platform_link_count, 1);
+
+        let target_dir = tempfile::tempdir().expect("target");
+        let target = Database::open(&target_dir.path().join("target.db")).expect("target db");
+        target.restore_backup(&document).expect("restore");
+        let restored_account = target.list_accounts().expect("restored account").remove(0);
+        let restored = target
+            .list_links(&restored_account.id)
+            .expect("restored links")
+            .remove(0);
+        assert_eq!(restored.login_account.as_deref(), Some("five-login"));
+        assert_eq!(restored.login_password.as_deref(), Some("plain-password"));
+        assert_eq!(restored.remark.as_deref(), Some("需要短信验证"));
+        assert_eq!(
+            target
+                .setting("theme")
+                .expect("restored setting")
+                .as_deref(),
+            Some("\"glacier\"")
+        );
+    }
+
+    #[test]
+    fn failed_restore_rolls_back_the_existing_database() {
+        let temp = tempfile::tempdir().expect("temp");
+        let db = Database::open(&temp.path().join("rollback.db")).expect("db");
+        db.sync_accounts(&[local_account("76561198000000009")])
+            .expect("scan");
+        let mut invalid = db.export_backup().expect("export");
+        invalid["tables"]["account_profiles"][0]
+            .as_object_mut()
+            .expect("profile")
+            .insert("unknown_column".into(), Value::String("bad".into()));
+
+        assert!(db.restore_backup(&invalid).is_err());
+        let accounts = db.list_accounts().expect("original account remains");
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].steam_id64, "76561198000000009");
     }
 }

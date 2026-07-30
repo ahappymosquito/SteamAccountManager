@@ -17,19 +17,23 @@ const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
   platformCredentialStatus: vi.fn(),
   savePlatformCredential: vi.fn(),
+  openDialog: vi.fn(),
+  saveDialog: vi.fn(),
+  exportBackupFile: vi.fn(),
+  previewBackupFile: vi.fn(),
+  restoreBackupFile: vi.fn(),
+  restoreSteamBackup: vi.fn(),
 }));
 
 vi.mock("./lib/api", () => ({
   api: {
     ...mocks,
-    restoreBackup: vi.fn(),
-    exportData: vi.fn(),
-    previewImport: vi.fn(),
-    applyImport: vi.fn(),
   },
 }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
-vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: mocks.openDialog,
+  save: mocks.saveDialog,
+}));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: mocks.getVersion }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.openUrl }));
 
@@ -54,6 +58,24 @@ describe("SettingsPage", () => {
       expired: false,
     });
     mocks.savePlatformCredential.mockResolvedValue(undefined);
+    mocks.openDialog.mockResolvedValue(null);
+    mocks.saveDialog.mockResolvedValue(null);
+    mocks.exportBackupFile.mockResolvedValue({
+      schemaVersion: 2,
+      exportedAt: "2026-07-30T00:00:00Z",
+      accountCount: 2,
+      platformLinkCount: 3,
+      cfgProfileCount: 1,
+    });
+    mocks.previewBackupFile.mockResolvedValue({
+      schemaVersion: 2,
+      exportedAt: "2026-07-30T00:00:00Z",
+      accountCount: 2,
+      platformLinkCount: 3,
+      cfgProfileCount: 1,
+    });
+    mocks.restoreBackupFile.mockResolvedValue(undefined);
+    mocks.restoreSteamBackup.mockResolvedValue(undefined);
   });
 
   it("persists Steam path and timeout while recovery stays low priority", async () => {
@@ -179,6 +201,72 @@ describe("SettingsPage", () => {
     expect(
       screen.getByText(/steam_cn_token Cookie 或 access_token 参数/),
     ).toBeInTheDocument();
+  });
+
+  it("exports a plaintext backup to the selected file", async () => {
+    const notify = vi.fn();
+    mocks.saveDialog.mockResolvedValue("D:\\backup.sam-backup.json");
+    render(<SettingsPage notify={notify} onConfigured={vi.fn()} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "导出备份文件" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.exportBackupFile).toHaveBeenCalledWith(
+        "D:\\backup.sam-backup.json",
+      ),
+    );
+    expect(notify).toHaveBeenCalledWith(
+      "success",
+      "备份文件已导出，包含 2 个账号和 3 条平台资料",
+    );
+  });
+
+  it("previews and restores a selected backup after confirmation", async () => {
+    const notify = vi.fn();
+    const configured = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mocks.openDialog.mockResolvedValue("D:\\backup.sam-backup.json");
+    render(
+      <SettingsPage notify={notify} onConfigured={configured} />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "从备份文件恢复" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.previewBackupFile).toHaveBeenCalledWith(
+        "D:\\backup.sam-backup.json",
+      ),
+    );
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringContaining("2 个账号、3 条平台资料和 1 个 CFG 方案"),
+    );
+    await waitFor(() =>
+      expect(mocks.restoreBackupFile).toHaveBeenCalledWith(
+        "D:\\backup.sam-backup.json",
+      ),
+    );
+    expect(configured).toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      "success",
+      "软件资料已恢复，请重启应用使全部数据生效",
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it("does nothing when backup file selection is cancelled", async () => {
+    render(<SettingsPage notify={vi.fn()} onConfigured={vi.fn()} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "从备份文件恢复" }),
+    );
+
+    await waitFor(() => expect(mocks.openDialog).toHaveBeenCalled());
+    expect(mocks.previewBackupFile).not.toHaveBeenCalled();
+    expect(mocks.restoreBackupFile).not.toHaveBeenCalled();
   });
 
   it("shows signed update details and portable conversion action", async () => {

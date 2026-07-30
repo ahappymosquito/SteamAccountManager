@@ -30,8 +30,17 @@ pub struct Account {
     pub favorite: bool,
     pub tags: Vec<String>,
     pub platform_codes: Vec<String>,
+    pub platform_summaries: Vec<PlatformSummary>,
     pub player_ranks: Vec<PlayerRankSummary>,
     pub avatar_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformSummary {
+    pub platform_code: String,
+    pub display_name: Option<String>,
+    pub external_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,6 +95,8 @@ pub struct PlatformLink {
     pub external_id: Option<String>,
     pub display_name: Option<String>,
     pub profile_url: Option<String>,
+    pub login_account: Option<String>,
+    pub login_password: Option<String>,
     pub remark: Option<String>,
     pub status: String,
     pub last_verified_at: Option<String>,
@@ -100,6 +111,8 @@ pub struct PlatformLinkInput {
     pub external_id: Option<String>,
     pub display_name: Option<String>,
     pub profile_url: Option<String>,
+    pub login_account: Option<String>,
+    pub login_password: Option<String>,
     pub remark: Option<String>,
     pub status: String,
 }
@@ -194,10 +207,11 @@ pub struct SwitchResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportPreview {
-    pub added: usize,
-    pub updated: usize,
-    pub skipped: usize,
-    pub blocked_fields: Vec<String>,
+    pub schema_version: u64,
+    pub exported_at: String,
+    pub account_count: usize,
+    pub platform_link_count: usize,
+    pub cfg_profile_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

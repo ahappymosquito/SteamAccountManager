@@ -1,5 +1,11 @@
 # Steam Account Manager
 
+## 0.10.1 平台快捷资料与文件备份
+
+- 每条 Steam 账号固定显示完美平台和 5E 快捷入口，未配置时显示“待填写”；点击后直接在详情中编辑对应平台。
+- 完美平台和 5E 可分别保存平台昵称、登录账号、明文密码和备注；账号与密码支持复制，密码默认遮罩，5E 使用平台昵称查询玩家数据。
+- 软件资料改为导出、选择明文 JSON 备份文件；恢复前在应用数据目录静默保存当前资料，再以数据库事务整体替换。查询 Token、玩家缓存、切换日志和 Steam 登录凭据不进入备份。
+
 ## 0.10.0 项目结构与 CodeGraph 索引
 
 - 新增 [项目结构文档](docs/project-structure.md)，整理前端、Tauri 后端、IPC 边界和关键业务调用链。
@@ -180,7 +186,7 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 - 在明确确认后关闭 Steam、备份配置、切换账号并重新启动；关联 5E 时随后启动或重启 5E
 - 判断本地确认、当前推测、Steam 未运行和未知状态，本地确认优先显示 Steam 中文昵称
 - 配置并直接启动第三方平台程序，不经过 shell
-- JSON 资料导入导出、冲突预览和危险字段拦截
+- 明文 JSON 文件备份、恢复预览、覆盖前内部快照和事务恢复
 - 本地切换日志、脱敏登录名和最近 10 次配置备份
 
 ## 如何根据用户名获取段位与近期比赛
@@ -231,11 +237,13 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 
 本工具只处理 Steam 官方客户端已记住且本机仍有效的登录状态，不参与 Steam 账号认证。它不会保存 Steam 密码、Steam Guard 密钥、`shared_secret`、`identity_secret`、Cookie、Steam Session Token 或浏览器数据，不会模拟登录、绕过 Steam Guard、读取或修改进程内存、向 Steam 或游戏注入代码或干预反作弊系统。状态失效时，用户必须在 Steam 官方客户端完成登录或 Steam Guard 验证。
 
+用户可为完美平台和 5E 手工保存平台登录账号、明文密码和备注，方便复制后自行登录及完成短信验证。此密码不加密、不用于自动登录，并会进入用户主动导出的明文 `.sam-backup.json` 文件；请按普通明文文件管理。5E Bearer Token 与完美 Access Token 仍只保存在 Windows 凭据管理器，不进入数据库或备份。
+
 5E 玩家查询使用其非公开网页数据接口，可能随平台调整而失效。ELO 来自最近一条具有有效段位的天梯比赛摘要，使用同一记录的 `origin_elo + change_elo`，界面明确标注为“最近比赛后 ELO”，不代表官方实时值。可选的 5E Bearer Token 仅保存在 Windows 凭据管理器，不写入 SQLite、日志、缓存、导入导出或错误文本；匿名查询仍可工作，401/403 时会保留凭据并自动降级。应用只缓存规范化结果，不保存平台原始 JSON。
 
 完美平台同样使用非公开网页接口。SteamID64 可直接作为目标玩家标识，但查询需要 Access Token；应用只读取无需私有 signer 的赛季记录接口，分数标注为“赛季记录分数”，不承诺实时性。Token 与 5E 凭据隔离存放于 Windows 凭据管理器，未配置时不会发起完美平台玩家查询。接口研究与字段边界见 `docs/perfect-world-player-query-research.md`。
 
-日志不会记录完整注册表、完整 VDF 内容或认证数据。Steam 登录名在日志中默认脱敏。导入器递归拒绝包含 password、cookie、token、secret、Steam Guard 等危险键名的数据。
+日志不会记录完整注册表、完整 VDF 内容、平台密码或认证数据。Steam 登录名在日志中默认脱敏。软件备份只允许版本化白名单业务表，查询 Token、Cookie、Steam Guard 数据、玩家缓存和切换日志不会导出。
 
 ### 会不会导致 Steam 封禁？
 
@@ -309,7 +317,7 @@ git push origin v0.1.3
 - `steam-account-manager.db`：SQLite 账号资料、设置和切换日志
 - `cfg-library\`：应用管理的简洁 CFG 主文件
 - `downloads\`：平台官方安装包临时目录；安装向导退出后自动删除安装包
-- `backups\`：修改前的 VDF 与元数据备份，默认保留最近 10 次
+- `backups\`：修改前的 VDF 与元数据备份，默认保留最近 10 次；`import-before-restore\` 保存软件资料恢复前的内部 JSON 快照
 
 应用不把数据库或备份放入 Steam 安装目录。
 

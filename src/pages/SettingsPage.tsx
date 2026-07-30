@@ -1,8 +1,7 @@
 /** Steam configuration, project identity, safety boundaries, and recovery tools. */
 import * as Dialog from "@radix-ui/react-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { open } from "@tauri-apps/plugin-dialog";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import {
@@ -18,6 +17,7 @@ import {
   Save,
   ShieldCheck,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { api } from "../lib/api";
@@ -90,6 +90,7 @@ export function SettingsPage({
   const [perfectWorldToken, setPerfectWorldToken] = useState("");
   const [perfectWorldStatus, setPerfectWorldStatus] = useState<PlatformCredentialStatus>();
   const [savingPerfectWorld, setSavingPerfectWorld] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
   const [credentialHelp, setCredentialHelp] =
     useState<keyof typeof credentialGuides>();
 
@@ -143,12 +144,12 @@ export function SettingsPage({
       notify("error", "无法打开链接，请检查系统默认浏览器");
     }
   };
-  const restore = async () => {
+  const restoreSteamBackup = async () => {
     if (!confirm("恢复最近一次 loginusers.vdf 备份？请先关闭 Steam。"))
       return;
     try {
-      await api.restoreBackup();
-      notify("success", "最近备份已恢复");
+      await api.restoreSteamBackup();
+      notify("success", "Steam 切换配置备份已恢复");
     } catch (error) {
       notify("error", errorMessage(error));
     }
@@ -179,36 +180,59 @@ export function SettingsPage({
       setSavingPerfectWorld(false);
     }
   };
-  const exportJson = async () => {
+  const exportBackup = async () => {
+    const date = new Date().toISOString().slice(0, 10);
+    const selected = await saveDialog({
+      title: "导出软件备份",
+      defaultPath: `Steam-Account-Manager-${date}.sam-backup.json`,
+      filters: [
+        {
+          name: "Steam Account Manager 备份",
+          extensions: ["sam-backup.json", "json"],
+        },
+      ],
+    });
+    if (typeof selected !== "string") return;
+    setBackupBusy(true);
     try {
-      const data = await api.exportData(false);
-      await writeText(JSON.stringify(data, null, 2));
-      notify("success", "导出 JSON 已复制到剪贴板");
+      const preview = await api.exportBackupFile(selected);
+      notify(
+        "success",
+        `备份文件已导出，包含 ${preview.accountCount} 个账号和 ${preview.platformLinkCount} 条平台资料`,
+      );
     } catch (error) {
       notify("error", errorMessage(error));
+    } finally {
+      setBackupBusy(false);
     }
   };
-  const importJson = async () => {
-    const text = prompt("粘贴本应用导出的 JSON");
-    if (!text) return;
+  const restoreFromFile = async () => {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      title: "选择软件备份文件",
+      filters: [
+        {
+          name: "Steam Account Manager 备份",
+          extensions: ["sam-backup.json", "json"],
+        },
+      ],
+    });
+    if (typeof selected !== "string") return;
+    setBackupBusy(true);
     try {
-      const data = JSON.parse(text);
-      const preview = await api.previewImport(data);
-      if (preview.blockedFields.length) {
-        notify("error", `发现危险字段：${preview.blockedFields.join(", ")}`);
-        return;
-      }
-      if (
-        confirm(
-          `将新增 ${preview.added}、合并 ${preview.updated}、跳过 ${preview.skipped} 条。继续？`,
-        )
-      ) {
-        await api.applyImport(data, false);
-        notify("success", "资料导入完成");
-        onConfigured();
-      }
+      const preview = await api.previewBackupFile(selected);
+      const confirmed = confirm(
+        `备份包含 ${preview.accountCount} 个账号、${preview.platformLinkCount} 条平台资料和 ${preview.cfgProfileCount} 个 CFG 方案。\n\n恢复将覆盖当前软件资料，继续吗？`,
+      );
+      if (!confirmed) return;
+      await api.restoreBackupFile(selected);
+      notify("success", "软件资料已恢复，请重启应用使全部数据生效");
+      onConfigured();
     } catch (error) {
       notify("error", errorMessage(error));
+    } finally {
+      setBackupBusy(false);
     }
   };
   const updateBusy =
@@ -585,17 +609,31 @@ export function SettingsPage({
         </summary>
         <div>
           <p>
-            这些工具只处理本应用资料及本机 Steam
-            配置备份，不能复制登录凭证到其他设备。
+            软件备份是明文 JSON，包含账号资料、平台登录账号和密码，但不包含平台查询 Token。
+            从文件恢复前，当前资料会自动保存在应用数据目录。
           </p>
-          <button className="button danger" onClick={() => void restore()}>
-            恢复最近备份
+          <button
+            className="button secondary"
+            disabled={backupBusy}
+            onClick={() => void exportBackup()}
+          >
+            <Download />
+            导出备份文件
           </button>
-          <button className="button secondary" onClick={() => void exportJson()}>
-            复制导出 JSON
+          <button
+            className="button secondary"
+            disabled={backupBusy}
+            onClick={() => void restoreFromFile()}
+          >
+            <Upload />
+            从备份文件恢复
           </button>
-          <button className="button secondary" onClick={() => void importJson()}>
-            导入 JSON
+          <button
+            className="button danger"
+            disabled={backupBusy}
+            onClick={() => void restoreSteamBackup()}
+          >
+            恢复 Steam 切换配置备份
           </button>
         </div>
       </details>

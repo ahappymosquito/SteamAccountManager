@@ -1,6 +1,6 @@
 /** Regression tests for account platform badges and current Steam identity copy. */
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountPlatformBadges } from "./AccountPlatformBadges";
 import { CurrentSteamStatus } from "./CurrentSteamStatus";
 import type { Account } from "../lib/types";
@@ -21,12 +21,31 @@ const account: Account = {
   ],
 };
 
+afterEach(cleanup);
+
 describe("account presentation", () => {
   it("shows platform name, rank and available score without duplicate lookup copy", () => {
     render(<AccountPlatformBadges account={account} />);
 
     expect(screen.getByText("5E · S · 2401")).toBeInTheDocument();
-    expect(screen.getByText("完美世界 · B+")).toBeInTheDocument();
+    expect(screen.getByText("完美平台 · B+")).toBeInTheDocument();
+  });
+
+  it("always renders both platform shortcuts and reports the selected platform", () => {
+    const onSelect = vi.fn();
+    render(
+      <AccountPlatformBadges
+        account={{ ...account, platformCodes: [], playerRanks: [] }}
+        onSelect={onSelect}
+      />,
+    );
+
+    expect(screen.getByText("完美平台 · 待填写")).toBeInTheDocument();
+    expect(screen.getByText("5E · 待填写")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "编辑5E账号资料" }),
+    );
+    expect(onSelect).toHaveBeenCalledWith("5e");
   });
 
   it("prefers the Chinese Steam persona name for locally confirmed status", () => {

@@ -47,10 +47,10 @@ export const api = {
   startSoftwareDownload: (code:string) => invoke<void>("start_software_download",{code}),
   launchSoftware: (code:string) => invoke<void>("launch_software",{code}),
   savePlatformApp: (app:PlatformApp) => invoke<void>("save_platform_app", { app }),
-  exportData: (includeSettings:boolean) => invoke<Record<string,unknown>>("export_data", { includeSettings }),
-  previewImport: (data:unknown) => invoke<ImportPreview>("preview_import", { data }),
-  applyImport: (data:unknown,overwrite:boolean) => invoke<ImportPreview>("apply_import", { data,overwrite }),
-  restoreBackup: () => invoke<void>("restore_latest_backup"),
+  exportBackupFile: (path:string) => invoke<ImportPreview>("export_backup_file", { path }),
+  previewBackupFile: (path:string) => invoke<ImportPreview>("preview_backup_file", { path }),
+  restoreBackupFile: (path:string) => invoke<ImportPreview>("restore_backup_file", { path }),
+  restoreSteamBackup: () => invoke<void>("restore_latest_steam_backup"),
   checkAppUpdate: () => invoke<UpdateInfo | null>("check_app_update"),
   installAppUpdate: (onProgress:(progress:UpdateProgress)=>void) => {
     const onEvent = new Channel<UpdateProgress>();

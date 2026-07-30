@@ -15,7 +15,7 @@ use app_update::AppUpdateState;
 use chrono::Utc;
 use parking_lot::Mutex;
 use rusqlite::{params, OptionalExtension};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     fs,
@@ -315,6 +315,8 @@ fn refresh_player_link(
                 external_id: Some(snapshot.external_id.clone()),
                 display_name: snapshot.nickname.clone().or(link.display_name),
                 profile_url: link.profile_url,
+                login_account: link.login_account,
+                login_password: link.login_password,
                 remark: link.remark,
                 status: if verified {
                     "user_confirmed".to_string()
@@ -437,6 +439,8 @@ async fn auto_link_perfectworld(
                 external_id: Some(steam_id64),
                 display_name: link.display_name.clone().or(persona_name),
                 profile_url: link.profile_url.clone(),
+                login_account: link.login_account.clone(),
+                login_password: link.login_password.clone(),
                 remark: link.remark.clone(),
                 status: "unverified".to_string(),
             })?;
@@ -458,6 +462,8 @@ async fn auto_link_perfectworld(
         external_id: Some(steam_id64),
         display_name: persona_name,
         profile_url: None,
+        login_account: None,
+        login_password: None,
         remark: None,
         status: "unverified".to_string(),
     })?;
@@ -1171,154 +1177,64 @@ fn launch_platform(
     Ok(())
 }
 
-fn dangerous(value: &Value, path: &str, out: &mut Vec<String>) {
-    match value {
-        Value::Object(map) => {
-            for (k, v) in map {
-                let lower = k.to_ascii_lowercase();
-                if [
-                    "password",
-                    "cookie",
-                    "token",
-                    "secret",
-                    "shared_secret",
-                    "identity_secret",
-                    "steam_guard",
-                ]
-                .iter()
-                .any(|d| lower.contains(d))
-                {
-                    out.push(format!("{path}.{k}"));
-                }
-                dangerous(v, &format!("{path}.{k}"), out)
-            }
-        }
-        Value::Array(values) => {
-            for v in values {
-                dangerous(v, path, out)
-            }
-        }
-        _ => {}
-    }
-}
-#[tauri::command]
-fn export_data(state: State<AppState>, include_settings: bool) -> AppResult<Value> {
-    let accounts = state.db.list_accounts()?;
-    let settings = if include_settings {
-        json!(get_settings(state)?)
-    } else {
-        Value::Null
-    };
-    Ok(
-        json!({"schemaVersion":1,"exportedAt":Utc::now().to_rfc3339(),"accounts":accounts,"settings":settings}),
-    )
-}
-#[tauri::command]
-fn preview_import(state: State<AppState>, data: Value) -> AppResult<ImportPreview> {
-    let mut blocked = Vec::new();
-    dangerous(&data, "$", &mut blocked);
-    if !blocked.is_empty() {
-        return Ok(ImportPreview {
-            added: 0,
-            updated: 0,
-            skipped: 0,
-            blocked_fields: blocked,
-        });
-    }
-    let items = data
-        .get("accounts")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::new("IMPORT_INVALID", "导入文件缺少 accounts 数组"))?;
-    let added = 0;
-    let mut updated = 0;
-    let mut skipped = 0;
-    for item in items {
-        if let Some(id) = item.get("steamId64").and_then(Value::as_str) {
-            if validate_steam_id(id).is_err() {
-                skipped += 1;
-            } else if state.db.account_id_by_steam_id(id)?.is_some() {
-                updated += 1
-            } else {
-                skipped += 1
-            }
-        } else {
-            skipped += 1
-        }
-    }
-    Ok(ImportPreview {
-        added,
-        updated,
-        skipped,
-        blocked_fields: vec![],
-    })
-}
-#[tauri::command]
-fn apply_import(state: State<AppState>, data: Value, overwrite: bool) -> AppResult<ImportPreview> {
-    let preview = preview_import(state.clone(), data.clone())?;
-    if !preview.blocked_fields.is_empty() {
+fn read_backup_file(path: &Path) -> AppResult<Value> {
+    let metadata = fs::metadata(path)
+        .map_err(|_| AppError::new("BACKUP_FILE_UNAVAILABLE", "无法读取所选备份文件"))?;
+    if !metadata.is_file() || metadata.len() > 64 * 1024 * 1024 {
         return Err(AppError::new(
-            "IMPORT_DANGEROUS_FIELDS",
-            "导入文件包含敏感字段",
+            "BACKUP_FILE_INVALID",
+            "备份文件无效或超过 64 MB",
         ));
     }
-    for item in data["accounts"].as_array().into_iter().flatten() {
-        let id = item
-            .get("steamId64")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if validate_steam_id(id).is_err() {
-            continue;
-        }
-        let Some(account_id) = state.db.account_id_by_steam_id(id)? else {
-            continue;
-        };
-        let old = state
-            .db
-            .list_accounts()?
-            .into_iter()
-            .find(|a| a.steam_id64 == id);
-        let pick = |key: &str, old: Option<String>| {
-            if overwrite {
-                item.get(key)
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .or(old)
-            } else {
-                old.or_else(|| item.get(key).and_then(Value::as_str).map(str::to_owned))
-            }
-        };
-        let input = ProfileInput {
-            account_id,
-            alias: pick("alias", old.as_ref().and_then(|a| a.alias.clone())),
-            remark: pick("remark", old.as_ref().and_then(|a| a.remark.clone())),
-            favorite: if overwrite {
-                item.get("favorite")
-                    .and_then(Value::as_bool)
-                    .unwrap_or_else(|| old.as_ref().map(|a| a.favorite).unwrap_or(false))
-            } else {
-                old.as_ref().map(|a| a.favorite).unwrap_or_else(|| {
-                    item.get("favorite")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
-            },
-            tags: item
-                .get("tags")
-                .and_then(Value::as_array)
-                .map(|v| {
-                    v.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_else(|| old.as_ref().map(|a| a.tags.clone()).unwrap_or_default()),
-        };
-        state.db.save_profile(&input)?;
-    }
+    let bytes = fs::read(path)?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| AppError::new("BACKUP_JSON_INVALID", "备份文件不是有效的 JSON"))
+}
+
+fn write_backup_file(path: &Path, document: &Value) -> AppResult<()> {
+    let bytes = serde_json::to_vec_pretty(document)
+        .map_err(|_| AppError::new("BACKUP_SERIALIZE_FAILED", "无法生成备份文件"))?;
+    fs::write(path, bytes)?;
+    Ok(())
+}
+
+fn write_pre_restore_snapshot(data_dir: &Path, document: &Value) -> AppResult<PathBuf> {
+    let internal_dir = data_dir.join("backups").join("import-before-restore");
+    fs::create_dir_all(&internal_dir)?;
+    let internal_path = internal_dir.join(format!(
+        "{}.sam-backup.json",
+        Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
+    ));
+    write_backup_file(&internal_path, document)?;
+    Ok(internal_path)
+}
+
+#[tauri::command]
+fn export_backup_file(state: State<AppState>, path: String) -> AppResult<ImportPreview> {
+    let document = state.db.export_backup()?;
+    let preview = Database::preview_backup(&document)?;
+    write_backup_file(Path::new(&path), &document)?;
     Ok(preview)
 }
+
 #[tauri::command]
-fn restore_latest_backup(state: State<AppState>) -> AppResult<()> {
+fn preview_backup_file(_state: State<AppState>, path: String) -> AppResult<ImportPreview> {
+    let document = read_backup_file(Path::new(&path))?;
+    Database::preview_backup(&document)
+}
+
+#[tauri::command]
+fn restore_backup_file(state: State<AppState>, path: String) -> AppResult<ImportPreview> {
+    let imported = read_backup_file(Path::new(&path))?;
+    let preview = Database::preview_backup(&imported)?;
+    let current = state.db.export_backup()?;
+    write_pre_restore_snapshot(&state.data_dir, &current)?;
+    state.db.restore_backup(&imported)?;
+    Ok(preview)
+}
+
+#[tauri::command]
+fn restore_latest_steam_backup(state: State<AppState>) -> AppResult<()> {
     steam::restore_latest(&steam_path(&state)?, &state.data_dir.join("backups"))
 }
 
@@ -1396,10 +1312,10 @@ pub fn run() {
             start_software_download,
             launch_software,
             launch_platform,
-            export_data,
-            preview_import,
-            apply_import,
-            restore_latest_backup,
+            export_backup_file,
+            preview_backup_file,
+            restore_backup_file,
+            restore_latest_steam_backup,
             app_update::check_app_update,
             app_update::install_app_update
         ])
@@ -1527,10 +1443,22 @@ mod tests {
     }
 
     #[test]
-    fn blocks_nested_secrets() {
-        let mut out = vec![];
-        dangerous(&json!({"nested":{"shared_secret":"x"}}), "$", &mut out);
-        assert_eq!(out.len(), 1);
+    fn pre_restore_snapshot_is_written_under_application_data() {
+        let data_dir = tempfile::tempdir().expect("application data");
+        let document = serde_json::json!({
+            "schemaVersion": 2,
+            "exportedAt": "2026-07-30T00:00:00Z",
+            "tables": {}
+        });
+        let path = write_pre_restore_snapshot(data_dir.path(), &document).expect("write snapshot");
+        assert!(path.is_file());
+        assert!(path.starts_with(
+            data_dir
+                .path()
+                .join("backups")
+                .join("import-before-restore")
+        ));
+        assert_eq!(read_backup_file(&path).expect("read snapshot"), document);
     }
 
     #[test]
