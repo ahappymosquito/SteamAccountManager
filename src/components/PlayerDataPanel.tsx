@@ -26,7 +26,12 @@ export function PlayerDataPanel({ link, onChanged }: { link: PlatformLink; onCha
   const perfectWorld = link.platformCode === "perfectworld";
   const platformName = perfectWorld ? "完美平台" : "5E";
   const panelTitle = `${platformName} 玩家数据`;
-  const scoreLabel = perfectWorld ? "赛季记录分数" : "最近比赛后 ELO";
+  const placement = !perfectWorld && snapshot?.rankingState === "placement";
+  const scoreLabel = perfectWorld
+    ? "赛季记录分数"
+    : placement
+      ? "定级赛"
+      : "最近比赛后 ELO";
 
   const load = async (forceRefresh = false) => {
     setLoading(true);
@@ -89,7 +94,7 @@ export function PlayerDataPanel({ link, onChanged }: { link: PlatformLink; onCha
           <h3>{panelTitle}</h3>
           <p className="player-subtitle">
             {snapshot.nickname || snapshot.externalId}
-            {snapshot.rankName ? ` · ${snapshot.rankName}` : ""}
+            {!placement && snapshot.rankName ? ` · ${snapshot.rankName}` : ""}
           </p>
         </div>
         <button
@@ -106,9 +111,19 @@ export function PlayerDataPanel({ link, onChanged }: { link: PlatformLink; onCha
         <BarChart3 />
         <div>
           <span>{scoreLabel}</span>
-          <strong>{number(snapshot.elo, 0)}</strong>
+          <strong>
+            {placement
+              ? `已打 ${snapshot.placementMatches ?? 0} 场`
+              : number(snapshot.elo, 0)}
+          </strong>
         </div>
-        <small>{perfectWorld ? "按 SteamID 自动匹配" : `${snapshot.stats.sampleSize} 场样本`}</small>
+        <small>
+          {perfectWorld
+            ? "按 SteamID 自动匹配"
+            : placement && snapshot.previousSeasonScore !== undefined
+              ? `排序参考：上赛季 ${Math.round(snapshot.previousSeasonScore)} 分`
+              : `${snapshot.stats.sampleSize} 场样本`}
+        </small>
       </div>
 
       {!perfectWorld && <dl className="player-metrics">

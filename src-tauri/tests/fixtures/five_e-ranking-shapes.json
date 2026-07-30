@@ -1,0 +1,51 @@
+{
+  "_description": "Minimal anonymized 5E ladder fields derived from the two user-supplied public player examples; identifiers and live scores are not retained.",
+  "placementWithHistory": [
+    {
+      "game_type": "battle1v1",
+      "origin_elo": "500",
+      "change_elo": "0",
+      "level_info": {
+        "level_type": 0,
+        "level_name": "",
+        "match_status": "",
+        "origin_match_total": 0
+      }
+    },
+    {
+      "game_type": "",
+      "origin_elo": "1000",
+      "change_elo": "20",
+      "level_info": {
+        "level_type": 2,
+        "level_name": "D",
+        "match_status": "3",
+        "origin_match_total": 2
+      }
+    },
+    {
+      "game_type": "",
+      "origin_elo": "2160",
+      "change_elo": "40",
+      "level_info": {
+        "level_type": 2,
+        "level_name": "A",
+        "match_status": "0",
+        "origin_match_total": 88
+      }
+    }
+  ],
+  "placementWithoutHistory": [
+    {
+      "game_type": "",
+      "origin_elo": "1000",
+      "change_elo": "15",
+      "level_info": {
+        "level_type": 2,
+        "level_name": "D",
+        "match_status": "3",
+        "origin_match_total": 1
+      }
+    }
+  ]
+}

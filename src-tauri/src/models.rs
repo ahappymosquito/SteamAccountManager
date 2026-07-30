@@ -50,6 +50,9 @@ pub struct PlayerRankSummary {
     pub rank_name: Option<String>,
     pub score: Option<f64>,
     pub score_source: Option<String>,
+    pub ranking_state: String,
+    pub placement_matches: Option<usize>,
+    pub previous_season_score: Option<f64>,
     pub stale: bool,
 }
 
@@ -160,12 +163,48 @@ pub struct PlayerSnapshot {
     pub rank_name: Option<String>,
     pub elo: Option<f64>,
     pub elo_source: Option<String>,
+    #[serde(default = "default_ranking_state")]
+    pub ranking_state: String,
+    #[serde(default)]
+    pub placement_matches: Option<usize>,
+    #[serde(default)]
+    pub previous_season_score: Option<f64>,
     pub stats: PlayerStats,
     pub recent_matches: Vec<PlayerMatch>,
     pub capabilities: Vec<String>,
     pub warnings: Vec<String>,
     pub fetched_at: String,
     pub stale: bool,
+}
+
+fn default_ranking_state() -> String {
+    "unknown".to_string()
+}
+
+#[cfg(test)]
+mod player_snapshot_tests {
+    use super::PlayerSnapshot;
+
+    #[test]
+    fn old_cached_snapshot_defaults_to_unknown_ranking_state() {
+        let snapshot: PlayerSnapshot = serde_json::from_str(
+            r#"{
+                "platform":"5e",
+                "externalId":"player",
+                "stats":{"sampleSize":0,"kills":0,"deaths":0},
+                "recentMatches":[],
+                "capabilities":[],
+                "warnings":[],
+                "fetchedAt":"2026-07-30T00:00:00Z",
+                "stale":false
+            }"#,
+        )
+        .expect("legacy snapshot");
+
+        assert_eq!(snapshot.ranking_state, "unknown");
+        assert_eq!(snapshot.placement_matches, None);
+        assert_eq!(snapshot.previous_season_score, None);
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

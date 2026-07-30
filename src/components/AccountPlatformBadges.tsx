@@ -9,20 +9,29 @@ const platformLabels: Record<PlatformCode, string> = {
 };
 export type QuickPlatformCode = "perfectworld" | "5e";
 
-export const platformBadgeText = (account: Account, code: PlatformCode) => {
+const platformBadgeDetails = (account: Account, code: PlatformCode) => {
   const rank = account.playerRanks?.find((item) => item.platform === code);
   const summary = account.platformSummaries?.find(
     (item) => item.platformCode === code,
   );
+  const ranking = rank?.rankingState === "placement"
+    ? ["定级赛", rank.placementMatches === undefined ? undefined : `已打 ${rank.placementMatches} 场`]
+    : [
+        rank?.rankName,
+        rank?.score === undefined ? undefined : Math.round(rank.score).toString(),
+      ];
   return [
-    platformLabels[code] ?? code,
     summary?.displayName || summary?.externalId,
-    rank?.rankName,
-    rank?.score === undefined ? undefined : Math.round(rank.score).toString(),
+    ...ranking,
   ]
     .filter(Boolean)
     .join(" · ");
 };
+
+export const platformBadgeText = (account: Account, code: PlatformCode) =>
+  [platformLabels[code] ?? code, platformBadgeDetails(account, code)]
+    .filter(Boolean)
+    .join(" · ");
 
 export function AccountPlatformBadges({
   account,
@@ -32,17 +41,18 @@ export function AccountPlatformBadges({
   onSelect?: (code: QuickPlatformCode) => void;
 }) {
   const fixedPlatforms: QuickPlatformCode[] = ["perfectworld", "5e"];
+  const linkedFixedPlatforms = fixedPlatforms.filter((code) =>
+    account.platformCodes.includes(code),
+  );
   const legacyPlatforms = (account.platformCodes ?? []).filter(
     (code) => !fixedPlatforms.includes(code as QuickPlatformCode),
   );
   return (
     <div className="platform-badges">
-      {fixedPlatforms.map((code) => (
+      {linkedFixedPlatforms.map((code) => (
         <button
           type="button"
-          className={`platform-badge platform-shortcut${
-            account.platformCodes.includes(code) ? "" : " muted"
-          }`}
+          className="platform-badge platform-shortcut linked"
           key={code}
           onClick={(event) => {
             event.stopPropagation();
@@ -50,9 +60,12 @@ export function AccountPlatformBadges({
           }}
           aria-label={`编辑${platformLabels[code]}账号资料`}
         >
-          {account.platformCodes.includes(code)
-            ? platformBadgeText(account, code)
-            : `${platformLabels[code]} · 待填写`}
+          <span className="platform-badge-label">{platformLabels[code]}</span>
+          {platformBadgeDetails(account, code) && (
+            <span className="platform-badge-detail">
+              {platformBadgeDetails(account, code)}
+            </span>
+          )}
         </button>
       ))}
       {legacyPlatforms.map((code) => (

@@ -130,6 +130,21 @@ button.platform-badge{font:inherit;cursor:pointer}.platform-shortcut:hover{borde
 @media(prefers-reduced-motion:reduce){.player-skeleton i{animation:none}}
 @media(max-width:600px){.player-metrics{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:10px}.player-metrics div:nth-child(3){border:0}.player-metrics div:nth-child(4){padding-left:0}}
 
+/* Dense account identity, auxiliary context, linked-platform status, and actions. */
+.account-sort{min-width:144px}
+.account-row{grid-template-columns:minmax(230px,1.15fr) minmax(150px,.75fr) minmax(180px,auto) auto;gap:18px;padding:11px 14px}
+.account-identity{display:flex;align-items:center;gap:12px;min-width:0}
+.account-main small{display:block;margin-top:4px;color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-context{display:flex;flex-direction:column;gap:5px;min-width:0}
+.account-context>small{color:var(--muted);font-size:10px}
+.account-platform-status{min-width:0;justify-self:end}
+.account-platform-status .platform-badges{justify-content:flex-end}
+button.platform-badge.linked{gap:5px;max-width:280px;padding:3px 7px;border-color:color-mix(in oklch,var(--primary),var(--line) 58%);background:color-mix(in oklch,var(--selected),var(--surface) 28%);color:var(--ink)}
+.platform-badge-label{font-size:9px;font-weight:750;color:var(--primary-hi);white-space:nowrap}
+.platform-badge-detail{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:500;color:var(--ink)}
+@media(max-width:1180px){.account-row{grid-template-columns:minmax(220px,1fr) minmax(170px,auto) auto}.account-context{display:none}.account-platform-status{justify-self:start}.account-platform-status .platform-badges{justify-content:flex-start}}
+@media(max-width:820px){.account-row{grid-template-columns:minmax(0,1fr) auto;gap:10px}.account-identity{grid-column:1/-1}.account-platform-status{grid-column:1;align-self:center}.row-actions{grid-column:2;justify-content:flex-end}}
+
 /* 0.6.6 lossless visual CFG workbench. */
 .cfg-view-switch{height:100%;display:flex;border-right:1px solid var(--line)}
 .cfg-view-switch button{display:flex;align-items:center;gap:6px;padding:0 12px;border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);font-size:11px;cursor:pointer}

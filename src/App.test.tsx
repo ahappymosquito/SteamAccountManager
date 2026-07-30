@@ -1,10 +1,11 @@
 /** Account identity presentation tests for local avatar fallbacks. */
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Account } from "./lib/types";
 
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => `asset://${path}` }));
 import { AccountAvatar } from "./components/AccountAvatar";
+import { AccountsPage } from "./App";
 
 const account: Account = { id: "1", steamId64: "76561198000000001", accountName: "alpha", personaName: "Player", alias: "Main", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", favorite: false, tags: [], platformCodes: [], avatarPath: "C:\\app\\avatars\\76561198000000001.png" };
 
@@ -47,5 +48,53 @@ describe("AccountAvatar", () => {
 
     expect(container.querySelector("img")).toHaveAttribute("src", `asset://${account.avatarPath}`);
     expect(container).not.toHaveTextContent("P");
+  });
+});
+
+describe("AccountsPage ranking controls", () => {
+  const ui = {
+    page: "accounts" as const,
+    query: "",
+    favoriteOnly: false,
+    platform: "5e" as const,
+    accountSort: "score_desc" as const,
+    selectedTags: [],
+    notice: null,
+    setPage: vi.fn(),
+    setQuery: vi.fn(),
+    setFavoriteOnly: vi.fn(),
+    setPlatform: vi.fn(),
+    setAccountSort: vi.fn(),
+    setSelectedTags: vi.fn(),
+    select: vi.fn(),
+    notify: vi.fn(),
+  };
+  const props = {
+    accounts: [],
+    tagOptions: [],
+    loading: false,
+    ui,
+    onScan: vi.fn(),
+    onAdd: vi.fn(),
+    onDetails: vi.fn(),
+    onPlatform: vi.fn(),
+    onSwitch: vi.fn(),
+    onFavorite: vi.fn(),
+  };
+
+  it("shows score sorting only while the 5E filter is active", () => {
+    const { rerender } = render(<AccountsPage {...props} />);
+
+    expect(screen.getByRole("combobox", { name: "5E 账号排序" }))
+      .toHaveValue("score_desc");
+
+    rerender(
+      <AccountsPage
+        {...props}
+        ui={{ ...ui, platform: "", accountSort: "recent" }}
+      />,
+    );
+    expect(screen.queryByRole("combobox", { name: "5E 账号排序" }))
+      .not.toBeInTheDocument();
   });
 });

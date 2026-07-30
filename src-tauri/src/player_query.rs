@@ -37,8 +37,11 @@ struct ResolvedFiveEPlayer {
 
 #[derive(Debug, PartialEq)]
 struct FiveELadderSummary {
-    rank_name: String,
+    rank_name: Option<String>,
     elo: Option<f64>,
+    ranking_state: String,
+    placement_matches: Option<usize>,
+    previous_season_score: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -146,7 +149,19 @@ impl PlayerQuery {
 
         let ladder = five_e_ladder_summary(&summaries);
         let elo = ladder.as_ref().and_then(|summary| summary.elo);
-        let rank_name = ladder.map(|summary| summary.rank_name);
+        let rank_name = ladder
+            .as_ref()
+            .and_then(|summary| summary.rank_name.clone());
+        let ranking_state = ladder
+            .as_ref()
+            .map(|summary| summary.ranking_state.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        let placement_matches = ladder
+            .as_ref()
+            .and_then(|summary| summary.placement_matches);
+        let previous_season_score = ladder
+            .as_ref()
+            .and_then(|summary| summary.previous_season_score);
 
         let mut warnings = Vec::new();
         if token_expired {
@@ -170,7 +185,7 @@ impl PlayerQuery {
             "recent_matches".to_string(),
             "match_stats".to_string(),
         ];
-        if elo.is_some() || rank_name.is_some() {
+        if ranking_state != "unknown" {
             capabilities.push("ladder".to_string());
         }
         if token.is_some() && !token_expired {
@@ -186,6 +201,9 @@ impl PlayerQuery {
                 rank_name,
                 elo,
                 elo_source: elo.map(|_| "latest_match".to_string()),
+                ranking_state,
+                placement_matches,
+                previous_season_score,
                 stats,
                 recent_matches: matches,
                 capabilities,
@@ -278,6 +296,11 @@ impl PlayerQuery {
         if selected.is_some() {
             capabilities.push("season_ladder".to_string());
         }
+        let ranking_state = if score.is_some() || rank_name.is_some() {
+            "ranked".to_string()
+        } else {
+            "unknown".to_string()
+        };
 
         Ok((
             PlayerSnapshot {
@@ -288,6 +311,9 @@ impl PlayerQuery {
                 rank_name,
                 elo: score,
                 elo_source: score.map(|_| "latest_season_record".to_string()),
+                ranking_state,
+                placement_matches: None,
+                previous_season_score: None,
                 stats: PlayerStats {
                     sample_size: 0,
                     kills: 0,
@@ -918,15 +944,62 @@ fn five_e_number(summary: &Value, key: &str) -> Option<f64> {
     })
 }
 
-fn five_e_ladder_summary(summaries: &[Value]) -> Option<FiveELadderSummary> {
-    summaries.iter().find_map(|summary| {
-        let rank_name = summary
+fn five_e_text(summary: &Value, key: &str) -> Option<String> {
+    value_text(summary.get(key)).or_else(|| {
+        summary
             .get("level_info")
-            .and_then(|level| value_text(level.get("level_name")))
-            .filter(|value| !value.trim().is_empty())?;
-        let elo = five_e_number(summary, "origin_elo")
-            .map(|before| before + five_e_number(summary, "change_elo").unwrap_or(0.0));
-        Some(FiveELadderSummary { rank_name, elo })
+            .and_then(|level| value_text(level.get(key)))
+    })
+}
+
+fn is_five_e_ladder(summary: &Value) -> bool {
+    let game_type = value_text(summary.get("game_type"))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if game_type.contains("1v1") {
+        return false;
+    }
+    let level_type = five_e_number(summary, "level_type").unwrap_or(0.0);
+    let rank_name = five_e_text(summary, "level_name").unwrap_or_default();
+    level_type > 0.0 || !rank_name.trim().is_empty()
+}
+
+fn five_e_elo_after(summary: &Value) -> Option<f64> {
+    five_e_number(summary, "origin_elo")
+        .map(|before| before + five_e_number(summary, "change_elo").unwrap_or(0.0))
+}
+
+fn five_e_ladder_summary(summaries: &[Value]) -> Option<FiveELadderSummary> {
+    let mut ladder = summaries.iter().filter(|summary| is_five_e_ladder(summary));
+    let latest = ladder.next()?;
+    let placement = five_e_text(latest, "match_status").as_deref() == Some("3");
+    if !placement {
+        return Some(FiveELadderSummary {
+            rank_name: five_e_text(latest, "level_name").filter(|value| !value.trim().is_empty()),
+            elo: five_e_elo_after(latest),
+            ranking_state: "ranked".to_string(),
+            placement_matches: None,
+            previous_season_score: None,
+        });
+    }
+
+    let fallback_count = 1 + ladder
+        .clone()
+        .take_while(|summary| five_e_text(summary, "match_status").as_deref() == Some("3"))
+        .count();
+    let placement_matches = five_e_number(latest, "origin_match_total")
+        .map(|count| count.max(0.0) as usize + 1)
+        .unwrap_or(fallback_count);
+    let previous_season_score = ladder
+        .find(|summary| five_e_text(summary, "match_status").as_deref() != Some("3"))
+        .and_then(five_e_elo_after);
+
+    Some(FiveELadderSummary {
+        rank_name: None,
+        elo: None,
+        ranking_state: "placement".to_string(),
+        placement_matches: Some(placement_matches),
+        previous_season_score,
     })
 }
 
@@ -1158,8 +1231,46 @@ mod tests {
 
         let ladder = five_e_ladder_summary(&summaries).expect("ranked ladder summary");
 
-        assert_eq!(ladder.rank_name, "S");
+        assert_eq!(ladder.rank_name.as_deref(), Some("S"));
         assert!((ladder.elo.expect("ELO") - 2401.1).abs() < 0.001);
+        assert_eq!(ladder.ranking_state, "ranked");
+        assert_eq!(ladder.placement_matches, None);
+    }
+
+    #[test]
+    fn five_e_placement_hides_current_elo_and_uses_previous_season_for_sorting() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/five_e-ranking-shapes.json"))
+                .expect("ranking fixture");
+        let summaries = fixture["placementWithHistory"]
+            .as_array()
+            .expect("placement summaries")
+            .clone();
+
+        let ladder = five_e_ladder_summary(&summaries).expect("placement summary");
+
+        assert_eq!(ladder.ranking_state, "placement");
+        assert_eq!(ladder.rank_name, None);
+        assert_eq!(ladder.elo, None);
+        assert_eq!(ladder.placement_matches, Some(3));
+        assert_eq!(ladder.previous_season_score, Some(2200.0));
+    }
+
+    #[test]
+    fn five_e_placement_without_history_does_not_invent_previous_score() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/five_e-ranking-shapes.json"))
+                .expect("ranking fixture");
+        let summaries = fixture["placementWithoutHistory"]
+            .as_array()
+            .expect("placement summaries")
+            .clone();
+
+        let ladder = five_e_ladder_summary(&summaries).expect("placement summary");
+
+        assert_eq!(ladder.ranking_state, "placement");
+        assert_eq!(ladder.placement_matches, Some(2));
+        assert_eq!(ladder.previous_season_score, None);
     }
 
     #[test]

@@ -27,11 +27,13 @@ describe("account presentation", () => {
   it("shows platform name, rank and available score without duplicate lookup copy", () => {
     render(<AccountPlatformBadges account={account} />);
 
-    expect(screen.getByText("5E · S · 2401")).toBeInTheDocument();
-    expect(screen.getByText("完美平台 · B+")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑5E账号资料" }))
+      .toHaveTextContent("5ES · 2401");
+    expect(screen.getByRole("button", { name: "编辑完美平台账号资料" }))
+      .toHaveTextContent("完美平台B+");
   });
 
-  it("always renders both platform shortcuts and reports the selected platform", () => {
+  it("hides unlinked platform shortcuts from the account row", () => {
     const onSelect = vi.fn();
     render(
       <AccountPlatformBadges
@@ -40,12 +42,41 @@ describe("account presentation", () => {
       />,
     );
 
-    expect(screen.getByText("完美平台 · 待填写")).toBeInTheDocument();
-    expect(screen.getByText("5E · 待填写")).toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: "编辑5E账号资料" }),
-    );
+    expect(screen.queryByText(/待填写/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑5E账号资料" }))
+      .not.toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("highlights a linked platform and reports the selected platform", () => {
+    const onSelect = vi.fn();
+    render(<AccountPlatformBadges account={account} onSelect={onSelect} />);
+
+    const shortcut = screen.getByRole("button", { name: "编辑5E账号资料" });
+    expect(shortcut).toHaveClass("linked");
+    fireEvent.click(shortcut);
     expect(onSelect).toHaveBeenCalledWith("5e");
+  });
+
+  it("shows placement progress without exposing a temporary score", () => {
+    render(
+      <AccountPlatformBadges
+        account={{
+          ...account,
+          platformCodes: ["5e"],
+          playerRanks: [{
+            platform: "5e",
+            rankingState: "placement",
+            placementMatches: 3,
+            previousSeasonScore: 2200,
+            stale: false,
+          }],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("定级赛 · 已打 3 场")).toBeInTheDocument();
+    expect(screen.queryByText("2200")).not.toBeInTheDocument();
   });
 
   it("prefers the Chinese Steam persona name for locally confirmed status", () => {

@@ -1,7 +1,8 @@
 /** Shared frontend models matching the validated Tauri command payloads. */
 export type PlatformCode = "perfectworld"|"5e"|"faceit"|"other";
 export type Theme = "aurora"|"violet"|"mint"|"glacier"|"daylight"|"lilac";
-export type PlayerRankSummary = { platform:string; rankName?:string; score?:number; scoreSource?:string; stale:boolean };
+export type RankingState = "ranked"|"placement"|"unknown";
+export type PlayerRankSummary = { platform:string; rankName?:string; score?:number; scoreSource?:string; rankingState?:RankingState; placementMatches?:number; previousSeasonScore?:number; stale:boolean };
 export type PlatformSummary = { platformCode:string; displayName?:string; externalId?:string };
 export type Account = { id:string; steamId64:string; accountName?:string; personaName?:string; lastLocalSeenAt?:string; lastSwitchedAt?:string; createdAt:string; updatedAt:string; alias?:string; remark?:string; groupName?:string; favorite:boolean; tags:string[]; platformCodes:PlatformCode[]; platformSummaries?:PlatformSummary[]; playerRanks?:PlayerRankSummary[]; avatarPath?:string };
 export type ProfileInput = { accountId:string; alias?:string; remark?:string; favorite:boolean; tags:string[] };
@@ -9,7 +10,7 @@ export type TagOption = { name:string; usageCount:number };
 export type PlatformLink = { id:string; steamAccountId:string; platformCode:string; externalId?:string; displayName?:string; profileUrl?:string; loginAccount?:string; loginPassword?:string; remark?:string; status:"unverified"|"user_confirmed"|"invalid"; lastVerifiedAt?:string };
 export type PlayerStats = { sampleSize:number; kills:number; deaths:number; kd?:number; rating?:number; adr?:number; headshotRate?:number; winRate?:number };
 export type PlayerMatch = { matchId:string; map?:string; occurredAt?:string; result?:"win"|"loss"|"tie"; score?:string; kills?:number; deaths?:number; assists?:number; rating?:number; adr?:number; headshotRate?:number; eloBefore?:number; eloChange?:number; eloAfter?:number; rounds?:number };
-export type PlayerSnapshot = { platform:string; externalId:string; nickname?:string; avatarUrl?:string; rankName?:string; elo?:number; eloSource?:"latest_match"|string; stats:PlayerStats; recentMatches:PlayerMatch[]; capabilities:string[]; warnings:string[]; fetchedAt:string; stale:boolean };
+export type PlayerSnapshot = { platform:string; externalId:string; nickname?:string; avatarUrl?:string; rankName?:string; elo?:number; eloSource?:"latest_match"|string; rankingState?:RankingState; placementMatches?:number; previousSeasonScore?:number; stats:PlayerStats; recentMatches:PlayerMatch[]; capabilities:string[]; warnings:string[]; fetchedAt:string; stale:boolean };
 export type PlatformCredentialStatus = { platformCode:string; configured:boolean; expired:boolean };
 export type PlatformApp = { platformCode:PlatformCode; name:string; executablePath:string; arguments:string[]; workingDirectory?:string; prelaunchCheck:boolean };
 export type Cs2Config = { steamId64:string; path:string; fileCount:number };

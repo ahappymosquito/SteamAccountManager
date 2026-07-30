@@ -99,7 +99,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 | `steam/mod.rs` | Steam 目录发现与校验、账号读取、进程控制、注册表状态、切号、头像缓存和平台客户端发现 |
 | `steam/vdf.rs` | Valve VDF 解析 |
 | `cs2.rs` | CS2 安装发现、CFG 方案文件、部署与校验 |
-| `player_query.rs` | 5E/完美世界玩家数据请求、重试、解析和稳定错误映射 |
+| `player_query.rs` | 5E/完美世界玩家数据请求、重试、定级与赛季排名解析和稳定错误映射 |
 | `software.rs` | 平台软件下载、进度、路径验证和启动 |
 | `app_update.rs` | Tauri Updater 检查、下载进度与安装 |
 | `models.rs` | IPC、数据库与业务数据模型 |

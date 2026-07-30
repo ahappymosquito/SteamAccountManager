@@ -30,7 +30,7 @@ import { TagFilter } from "./components/TagFilter";
 import { TitleBar } from "./components/TitleBar";
 import { api } from "./lib/api";
 import { APP_ICON_PATH } from "./lib/appMeta";
-import { filterAccounts } from "./lib/filter";
+import { filterAccounts, sortAccounts } from "./lib/filter";
 import { applyTheme, resolveTheme, savedTheme, storedTheme } from "./lib/themes";
 import { switchResultNotice } from "./lib/switchResult";
 import type {
@@ -173,14 +173,17 @@ export default function App() {
 
   const filtered = useMemo(
     () =>
-      filterAccounts(
-        accounts,
-        ui.query,
-        ui.favoriteOnly,
-        ui.platform,
-        ui.selectedTags,
+      sortAccounts(
+        filterAccounts(
+          accounts,
+          ui.query,
+          ui.favoriteOnly,
+          ui.platform,
+          ui.selectedTags,
+        ),
+        ui.accountSort,
       ),
-    [accounts, ui.query, ui.favoriteOnly, ui.platform, ui.selectedTags],
+    [accounts, ui.query, ui.favoriteOnly, ui.platform, ui.selectedTags, ui.accountSort],
   );
 
   const updateTheme = (nextTheme: Theme) => {
@@ -439,7 +442,7 @@ function Nav({
   );
 }
 
-function AccountsPage({
+export function AccountsPage({
   accounts,
   tagOptions,
   loading,
@@ -497,6 +500,22 @@ function AccountsPage({
           <option value="other">其他</option>
           <option value="unlinked">未关联平台</option>
         </select>
+        {ui.platform === "5e" && (
+          <select
+            className="account-sort"
+            aria-label="5E 账号排序"
+            value={ui.accountSort}
+            onChange={(event) =>
+              ui.setAccountSort(
+                event.target.value as "score_desc" | "score_asc" | "recent",
+              )
+            }
+          >
+            <option value="score_desc">分数从高到低</option>
+            <option value="score_asc">分数从低到高</option>
+            <option value="recent">最近切换</option>
+          </select>
+        )}
         <TagFilter
           options={tagOptions}
           selected={ui.selectedTags}
@@ -544,34 +563,39 @@ function AccountsPage({
               key={account.id}
               onClick={() => onDetails(account)}
             >
-              <AccountAvatar account={account} />
-              <div className="account-main">
-                <div className="account-title">
-                  <h2>
-                    {account.personaName ||
-                      account.alias ||
-                      account.accountName ||
-                      "未命名账号"}
-                  </h2>
-                  {account.favorite && <Star className="favorite" />}
+              <div className="account-identity">
+                <AccountAvatar account={account} />
+                <div className="account-main">
+                  <div className="account-title">
+                    <h2>
+                      {account.personaName ||
+                        account.alias ||
+                        account.accountName ||
+                        "未命名账号"}
+                    </h2>
+                    {account.favorite && <Star className="favorite" />}
+                  </div>
+                  <small>{account.accountName || "未提供 Steam 登录名"}</small>
                 </div>
+              </div>
+              <div className="account-context">
+                <span className="remark" title={account.remark}>
+                  {account.remark || "暂无备注"}
+                </span>
                 <div className="metadata-row">
-                  <AccountPlatformBadges
-                    account={account}
-                    onSelect={(platform) => onPlatform(account, platform)}
-                  />
                   <div className="tags">
                     {account.tags.map((tag) => (
                       <span key={tag}>{tag}</span>
                     ))}
                   </div>
                 </div>
-              </div>
-              <div className="account-detail">
-                <span className="remark" title={account.remark}>
-                  {account.remark || "暂无备注"}
-                </span>
                 <small>最近切换 {formatTime(account.lastSwitchedAt)}</small>
+              </div>
+              <div className="account-platform-status">
+                <AccountPlatformBadges
+                  account={account}
+                  onSelect={(platform) => onPlatform(account, platform)}
+                />
               </div>
               <div
                 className="row-actions"

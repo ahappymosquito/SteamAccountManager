@@ -405,6 +405,9 @@ impl Database {
                         rank_name: snapshot.rank_name,
                         score: snapshot.elo,
                         score_source: snapshot.elo_source,
+                        ranking_state: snapshot.ranking_state,
+                        placement_matches: snapshot.placement_matches,
+                        previous_season_score: snapshot.previous_season_score,
                         stale: snapshot.stale
                             || chrono::DateTime::parse_from_rfc3339(&expires_at)
                                 .is_ok_and(|expires| expires <= Utc::now()),

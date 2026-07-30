@@ -96,6 +96,23 @@ describe("PlayerDataPanel", () => {
     );
   });
 
+  it("shows placement progress and only uses the previous season as a sort reference", async () => {
+    mocks.playerData.mockResolvedValue({
+      ...snapshot,
+      rankName: undefined,
+      elo: undefined,
+      rankingState: "placement",
+      placementMatches: 3,
+      previousSeasonScore: 2200,
+    });
+    render(<PlayerDataPanel link={link} />);
+
+    expect(await screen.findByText("定级赛")).toBeInTheDocument();
+    expect(screen.getByText("已打 3 场")).toBeInTheDocument();
+    expect(screen.getByText("排序参考：上赛季 2200 分")).toBeInTheDocument();
+    expect(screen.queryByText("最近比赛后 ELO")).not.toBeInTheDocument();
+  });
+
   it("labels Perfect World scores as season records without inventing match stats", async () => {
     mocks.playerData.mockResolvedValue({
       ...snapshot,
