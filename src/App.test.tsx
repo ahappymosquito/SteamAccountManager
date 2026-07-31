@@ -5,9 +5,13 @@ import type { Account } from "./lib/types";
 
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => `asset://${path}` }));
 import { AccountAvatar } from "./components/AccountAvatar";
-import { AccountsPage } from "./App";
+import { ACCOUNT_REFRESH_INTERVAL_MS, AccountsPage } from "./App";
 
 const account: Account = { id: "1", steamId64: "76561198000000001", accountName: "alpha", personaName: "Player", alias: "Main", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", favorite: false, tags: [], platformCodes: [], avatarPath: "C:\\app\\avatars\\76561198000000001.png" };
+
+it("refreshes the account page on a ten-second cadence", () => {
+  expect(ACCOUNT_REFRESH_INTERVAL_MS).toBe(10_000);
+});
 
 describe("AccountAvatar", () => {
   it("shows the account initial when no cached image is available", () => {
@@ -120,6 +124,8 @@ describe("AccountsPage ranking controls", () => {
       name: "调整 Player 的顺序",
     });
     expect(handle).toBeEnabled();
+    expect(handle).toHaveAttribute("draggable", "true");
+    expect(handle.closest("article")).not.toHaveAttribute("draggable", "true");
     fireEvent.keyDown(handle, { key: "ArrowDown", altKey: true });
     expect(onReorder).toHaveBeenCalledWith(
       account.steamId64,

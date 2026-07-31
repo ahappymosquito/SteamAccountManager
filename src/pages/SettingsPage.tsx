@@ -1,16 +1,14 @@
-/** Steam configuration, project identity, safety boundaries, and recovery tools. */
+/** Application version, switching preferences, backup recovery, and optional query credentials. */
 import * as Dialog from "@radix-ui/react-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import {
-  ChevronDown,
   CircleHelp,
   Database,
   Download,
   ExternalLink,
-  FolderOpen,
   GitBranch,
   KeyRound,
   RefreshCw,
@@ -82,7 +80,6 @@ export function SettingsPage({
   onCheckUpdate?: () => void;
   onInstallUpdate?: () => void;
 }) {
-  const [path, setPath] = useState("");
   const [timeout, setTimeoutValue] = useState(15);
   const [saving, setSaving] = useState(false);
   const [version, setVersion] = useState("未知");
@@ -109,7 +106,6 @@ export function SettingsPage({
     void api
       .settings()
       .then((settings) => {
-        setPath(String(settings.steam_path ?? "").replace(/^"|"$/g, ""));
         setTimeoutValue(Number(settings.shutdown_timeout ?? 15));
       })
       .catch(() => {});
@@ -118,29 +114,11 @@ export function SettingsPage({
     void api.platformCredentialStatus("perfectworld").then(setPerfectWorldStatus).catch(() => {});
   }, []);
 
-  const choose = async () => {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "选择 Steam 安装目录",
-    });
-    if (typeof selected === "string") setPath(selected);
-  };
-  const auto = async () => {
-    try {
-      const found = await api.discoverSteam();
-      if (found) setPath(found);
-      else notify("error", "未自动发现 Steam，请手动选择目录");
-    } catch (error) {
-      notify("error", errorMessage(error));
-    }
-  };
   const save = async () => {
     setSaving(true);
     try {
-      await api.setSteamPath(path);
       await api.setSetting("shutdown_timeout", timeout);
-      notify("success", "Steam 设置已保存");
+      notify("success", "账号切换设置已保存");
       onConfigured();
     } catch (error) {
       notify("error", errorMessage(error));
@@ -276,38 +254,18 @@ export function SettingsPage({
     : "更新并重启";
 
   return (
-    <section>
+    <section className="settings-page-layout">
       <header className="page-heading">
         <div>
           <h1>设置</h1>
-          <p>Steam 路径、项目信息与账号切换安全边界。</p>
+          <p>版本更新、账号切换、备份恢复与平台查询凭据。</p>
         </div>
       </header>
       <section className="settings-primary">
         <div className="section-heading">
-          <h2>Steam</h2>
-          <p>选择包含 steam.exe 和 config/loginusers.vdf 的安装目录。</p>
+          <h2>账号切换</h2>
+          <p>Steam 安装目录已移至“平台”页面统一配置。</p>
         </div>
-        <label>
-          Steam 安装目录
-          <div className="input-row">
-            <input
-              value={path}
-              onChange={(event) => setPath(event.target.value)}
-            />
-            <button
-              className="button secondary"
-              onClick={() => void choose()}
-            >
-              <FolderOpen />
-              浏览
-            </button>
-            <button className="button secondary" onClick={() => void auto()}>
-              <RefreshCw />
-              自动发现
-            </button>
-          </div>
-        </label>
         <label>
           关闭 Steam 等待超时（秒）
           <input
@@ -324,10 +282,15 @@ export function SettingsPage({
           onClick={() => void save()}
         >
           <Save />
-          {saving ? "正在保存" : "保存 Steam 设置"}
+          {saving ? "正在保存" : "保存切换设置"}
         </button>
       </section>
-      <section className="fivee-credential" aria-labelledby="fivee-credential-title">
+      <details className="fivee-credential credential-panel" aria-labelledby="fivee-credential-title">
+        <summary>
+          <span><KeyRound />5E 查询凭据</span>
+          <small>{fiveEStatus?.configured ? "已配置" : "默认关闭"}</small>
+        </summary>
+        <div className="credential-panel-body">
         <div className="section-heading">
           <div className="credential-heading-row">
             <h2 id="fivee-credential-title">
@@ -396,8 +359,14 @@ export function SettingsPage({
             </button>
           )}
         </div>
-      </section>
-      <section className="fivee-credential" aria-labelledby="perfectworld-credential-title">
+        </div>
+      </details>
+      <details className="fivee-credential credential-panel" aria-labelledby="perfectworld-credential-title">
+        <summary>
+          <span><KeyRound />完美平台查询凭据</span>
+          <small>{perfectWorldStatus?.configured ? "已配置" : "默认关闭"}</small>
+        </summary>
+        <div className="credential-panel-body">
         <div className="section-heading">
           <div className="credential-heading-row">
             <h2 id="perfectworld-credential-title">
@@ -466,7 +435,8 @@ export function SettingsPage({
             </button>
           )}
         </div>
-      </section>
+        </div>
+      </details>
       <Dialog.Root
         open={Boolean(credentialHelp)}
         onOpenChange={(open) => !open && setCredentialHelp(undefined)}
@@ -622,20 +592,15 @@ export function SettingsPage({
           </ul>
         </div>
       </section>
-      <details className="advanced-tools">
-        <summary>
-          <span>
-            <Database />
-            高级与恢复
-          </span>
-          <small>备份、导入和导出</small>
-          <ChevronDown />
-        </summary>
-        <div>
+      <section className="advanced-tools backup-tools" aria-labelledby="backup-tools-title">
+        <div className="section-heading">
+          <h2 id="backup-tools-title"><Database />备份与恢复</h2>
           <p>
             软件备份是明文 JSON，包含账号资料、平台登录账号和密码，但不包含平台查询 Token。
             从文件恢复前，当前资料会自动保存在应用数据目录。
           </p>
+        </div>
+        <div className="backup-actions">
           <button
             className="button secondary"
             disabled={backupBusy}
@@ -660,7 +625,7 @@ export function SettingsPage({
             恢复 Steam 切换配置备份
           </button>
         </div>
-      </details>
+      </section>
       <Dialog.Root
         open={Boolean(restoreCandidate)}
         onOpenChange={(open) => !open && !backupBusy && setRestoreCandidate(undefined)}

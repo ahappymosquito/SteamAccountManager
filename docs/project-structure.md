@@ -54,15 +54,15 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 ### 启动与应用壳
 
 - `src/main.tsx`：React 根入口，恢复主题并安装 Radix Tooltip Provider。
-- `src/App.tsx`：应用壳和主要用例编排；持有账号、当前 Steam 状态、登录会话、主题与更新状态，按 `useUi.page` 切换页面。
+- `src/App.tsx`：应用壳和主要用例编排；持有账号、当前 Steam 状态、登录会话、主题与更新状态，按 `useUi.page` 切换页面，并在账号页每 10 秒静默扫描本机状态。
 - `src/store.ts`：Zustand UI 状态，管理页面、搜索、收藏、平台、5E 排序、标签和通知；账号自定义顺序持久化在后端普通设置中。
 - `src/cfgWorkspace.ts`：CFG 草稿状态与串行保存；账号切换前由 `flushCfgDraft()` 保证草稿落盘。
 
 ### 页面
 
 - `pages/Cs2Page.tsx`：CFG 方案、可视化命令编辑、源码编辑与导入导出。
-- `pages/PlatformsPage.tsx`：平台客户端发现、下载、路径配置和启动。
-- `pages/SettingsPage.tsx`：Steam 路径、超时、主题、平台凭据、数据导入导出、备份恢复和应用更新。
+- `pages/PlatformsPage.tsx`：统一管理 Steam、5E、完美和 TeamSpeak 3 的发现、下载、路径配置、启动与可持久化拖拽顺序。
+- `pages/SettingsPage.tsx`：版本更新、切换超时、默认折叠的平台凭据、统一数据导入导出与备份恢复。
 - 软件备份导出保持全量；恢复命令接收分类选择，并在数据库层按 SteamID64 将账号资料映射到本机当前可用账号。
 - 账号列表与切换日志目前仍由 `App.tsx` 内部的 `AccountsPage`、`LogsPage` 实现。
 

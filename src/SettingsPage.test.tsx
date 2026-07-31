@@ -1,4 +1,4 @@
-/** Settings tests for Steam configuration, project safety details, links, and recovery tools. */
+/** Settings tests for switching preferences, project safety details, credentials, and recovery tools. */
 import {
   cleanup,
   fireEvent,
@@ -86,23 +86,22 @@ describe("SettingsPage", () => {
     mocks.restoreSteamBackup.mockResolvedValue(undefined);
   });
 
-  it("persists Steam path and timeout while recovery stays low priority", async () => {
+  it("keeps version first, unifies backup tools, and collapses credentials at the bottom", async () => {
     const configured = vi.fn();
     render(<SettingsPage notify={vi.fn()} onConfigured={configured} />);
 
-    expect(
-      await screen.findByDisplayValue("D:\\Steam"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("高级与恢复").closest("details")).not.toHaveAttribute(
-      "open",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "保存 Steam 设置" }));
+    await screen.findByText("v0.4.2");
+    expect(screen.queryByDisplayValue("D:\\Steam")).not.toBeInTheDocument();
+    expect(screen.getByText("备份与恢复")).toBeInTheDocument();
+    expect(screen.getAllByText("5E 查询凭据")[0].closest("details")).not.toHaveAttribute("open");
+    expect(screen.getAllByText("完美平台查询凭据")[0].closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByRole("button", { name: "保存切换设置" }));
 
-    await waitFor(() =>
-      expect(mocks.setSteamPath).toHaveBeenCalledWith("D:\\Steam"),
-    );
-    expect(mocks.setSetting).toHaveBeenCalledWith("shutdown_timeout", 20);
-    expect(configured).toHaveBeenCalled();
+    expect(mocks.setSteamPath).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mocks.setSetting).toHaveBeenCalledWith("shutdown_timeout", 20);
+      expect(configured).toHaveBeenCalled();
+    });
   });
 
   it("shows the local version, safety boundaries, and official project links", async () => {

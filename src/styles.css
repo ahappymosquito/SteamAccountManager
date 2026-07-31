@@ -180,6 +180,7 @@ button.platform-badge.linked{gap:5px;max-width:280px;padding:3px 7px;border-colo
 .account-row.dragging{opacity:.46;background:var(--selected)}
 .account-drag-handle{width:26px;height:34px;display:grid;place-items:center;align-self:center;padding:0;border:0;background:transparent;color:var(--muted);cursor:grab}
 .account-drag-handle:active{cursor:grabbing}.account-drag-handle:disabled{opacity:.2;cursor:not-allowed}.account-drag-handle svg{width:15px;height:15px}
+.account-drag-handle[draggable="true"]{touch-action:none;user-select:none;-webkit-user-drag:element}
 .account-main{min-width:0}.account-title h2{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .account-platform-status{justify-self:start;width:100%}.account-platform-status .platform-badges{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));justify-content:stretch;gap:7px}
 button.platform-badge{min-width:0;min-height:34px;max-width:none;display:flex;align-items:center;gap:6px;padding:5px 8px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--muted);text-align:left}
@@ -194,3 +195,32 @@ button.platform-badge.invalid{border-color:color-mix(in oklch,var(--danger),var(
 .platform-card-toggle{width:100%;display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:8px;padding:11px 12px;border:0;background:transparent;color:var(--ink);text-align:left;cursor:pointer}.platform-card-toggle>svg{width:15px;height:15px;color:var(--muted)}.platform-card-toggle>span{display:flex;min-width:0;align-items:baseline;gap:8px}.platform-card-toggle strong{font-size:11px}.platform-card-toggle small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px}.platform-card-toggle em{color:var(--muted);font-size:9px;font-style:normal;white-space:nowrap}.platform-card-content{padding:0 12px 12px;border-top:1px solid var(--line)}.platform-card-content .player-data{margin-top:10px;padding-bottom:0;border-bottom:0}
 @media(max-width:1180px){.account-row{grid-template-columns:24px minmax(160px,.7fr) minmax(220px,1fr) auto}.platform-score{display:none}}
 @media(max-width:820px){.account-row{grid-template-columns:22px minmax(0,1fr) auto}.account-identity{grid-column:2}.account-platform-status{grid-column:2}.row-actions{grid-column:3;grid-row:1/3}.account-drag-handle{grid-row:1/3}.platform-card-toggle{grid-template-columns:18px minmax(0,1fr)}.platform-card-toggle em{grid-column:2}}
+
+/* Settings information hierarchy and collapsed credential panels. */
+.settings-page-layout{display:flex;flex-direction:column}
+.settings-page-layout>.page-heading{order:-20}
+.settings-page-layout>.about-safety{order:-10}
+.settings-page-layout>.settings-primary{order:0}
+.settings-page-layout>.backup-tools{order:1}
+.settings-page-layout>.credential-panel{order:10}
+.backup-tools{display:block}
+.backup-tools .section-heading h2{display:flex;align-items:center;gap:8px}
+.backup-tools .section-heading h2 svg{width:18px;height:18px}
+.backup-actions{display:flex;flex-wrap:wrap;gap:8px}
+.credential-panel{padding:0;overflow:hidden}
+.credential-panel>summary{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;cursor:pointer;list-style:none}
+.credential-panel>summary::-webkit-details-marker{display:none}
+.credential-panel>summary span{display:flex;align-items:center;gap:8px;font-weight:700}
+.credential-panel>summary svg{width:17px;height:17px;color:var(--primary)}
+.credential-panel>summary small{color:var(--muted)}
+.credential-panel[open]>summary{border-bottom:1px solid var(--line)}
+.credential-panel-body{padding:18px}
+
+/* Platform rows use the handle itself as the only drag source. */
+.software-row{grid-template-columns:24px 48px minmax(220px,1fr) auto auto}
+.software-drag-handle{width:24px;height:36px;display:grid;place-items:center;padding:0;border:0;background:transparent;color:var(--muted);cursor:grab;touch-action:none;user-select:none;-webkit-user-drag:element}
+.software-drag-handle:active{cursor:grabbing}
+.software-drag-handle svg{width:15px;height:15px}
+.software-row.dragging{opacity:.55}
+@media(max-width:1100px){.software-row{grid-template-columns:24px 48px minmax(180px,1fr) auto}.software-actions{grid-column:3/-1}}
+@media(max-width:820px){.software-row{grid-template-columns:24px 44px 1fr}.software-status,.software-actions{grid-column:3}}

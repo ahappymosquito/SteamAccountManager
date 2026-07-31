@@ -1,5 +1,5 @@
 /** Main application shell coordinating navigation, account switching, and feature pages. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   FileClock,
   FileCode2,
@@ -59,6 +59,8 @@ import { useUi, type NoticeKind, type PlatformFilter } from "./store";
 
 export { SettingsPage } from "./pages/SettingsPage";
 
+export const ACCOUNT_REFRESH_INTERVAL_MS = 10_000;
+
 const errorMessage = (error: unknown) =>
   (error as AppError)?.message || "操作失败，请稍后重试";
 const formatTime = (value?: string) =>
@@ -87,14 +89,15 @@ export default function App() {
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress>();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  const silentScanRunning = useRef(false);
 
   const notify = (kind: NoticeKind, text: string) => {
     ui.notify({ kind, text });
     window.setTimeout(() => ui.notify(null), 4500);
   };
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (showLoading = true, reportErrors = true) => {
+    if (showLoading) setLoading(true);
     try {
       const [items, current, tags, settings] = await Promise.all([
         api.accounts(),
@@ -107,9 +110,9 @@ export default function App() {
       setStatus(current);
       setTagOptions(tags);
     } catch (error) {
-      notify("error", errorMessage(error));
+      if (reportErrors) notify("error", errorMessage(error));
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
@@ -144,6 +147,23 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (ui.page !== "accounts") return;
+    const timer = window.setInterval(async () => {
+      if (silentScanRunning.current) return;
+      silentScanRunning.current = true;
+      try {
+        await api.scan();
+        await load(false, false);
+      } catch {
+        // Background refresh stays silent; manual refresh still reports errors.
+      } finally {
+        silentScanRunning.current = false;
+      }
+    }, ACCOUNT_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [ui.page]);
 
   const checkForUpdate = async (manual = false) => {
     setCheckingUpdate(true);
@@ -622,13 +642,6 @@ export function AccountsPage({
                 draggingId === account.steamId64 ? " dragging" : ""
               }`}
               key={account.id}
-              draggable={reorderEnabled}
-              onDragStart={(event) => {
-                if (!reorderEnabled) return;
-                setDraggingId(account.steamId64);
-                event.dataTransfer.effectAllowed = "move";
-                event.dataTransfer.setData("text/plain", account.steamId64);
-              }}
               onDragOver={(event) => {
                 if (reorderEnabled) event.preventDefault();
               }}
@@ -640,13 +653,13 @@ export function AccountsPage({
                 if (sourceId) onReorder(sourceId, account.steamId64);
                 setDraggingId(undefined);
               }}
-              onDragEnd={() => setDraggingId(undefined)}
               onClick={() => onDetails(account)}
             >
               <button
                 type="button"
                 className="account-drag-handle"
                 disabled={!reorderEnabled}
+                draggable={reorderEnabled}
                 aria-label={`调整 ${account.personaName || "未命名 Steam 账号"} 的顺序`}
                 title={
                   reorderEnabled
@@ -654,6 +667,17 @@ export function AccountsPage({
                     : "清除筛选后可调整顺序"
                 }
                 onClick={(event) => event.stopPropagation()}
+                onDragStart={(event) => {
+                  if (!reorderEnabled) return;
+                  event.stopPropagation();
+                  setDraggingId(account.steamId64);
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", account.steamId64);
+                }}
+                onDragEnd={(event) => {
+                  event.stopPropagation();
+                  setDraggingId(undefined);
+                }}
                 onKeyDown={(event) => {
                   if (!reorderEnabled || !event.altKey) return;
                   if (event.key === "ArrowUp") {

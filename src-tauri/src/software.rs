@@ -17,6 +17,7 @@ use std::{
 pub const PERFECT_DOWNLOAD_PAGE: &str = "https://pvp.wanmei.com/";
 pub const FIVE_E_DOWNLOAD_PAGE: &str = "https://arena.5eplay.com/download/latest";
 pub const TEAMSPEAK_DOWNLOAD_PAGE: &str = "https://www.teamspeak.com/en/downloads/";
+pub const STEAM_DOWNLOAD_PAGE: &str = "https://store.steampowered.com/about/";
 const TEAMSPEAK_FOLDERS: &[&str] = &["TeamSpeak 3 Client", "TeamSpeak Client"];
 const TEAMSPEAK_EXECUTABLES: &[&str] = &["ts3client_win64.exe", "ts3client_win32.exe"];
 const REGISTRY_INSTALL_SCAN_DEPTH: usize = 3;
@@ -54,6 +55,7 @@ fn edge_candidates() -> Vec<PathBuf> {
 
 pub fn open_official(code: &str) -> AppResult<()> {
     let url = match code {
+        "steam" => STEAM_DOWNLOAD_PAGE,
         "5e" => FIVE_E_DOWNLOAD_PAGE,
         "perfectworld" => PERFECT_DOWNLOAD_PAGE,
         "teamspeak3" => TEAMSPEAK_DOWNLOAD_PAGE,

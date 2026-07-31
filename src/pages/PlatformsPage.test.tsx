@@ -1,5 +1,5 @@
 /** Regression tests for platform detection summaries and context-aware software actions. */
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   launchSoftware: vi.fn(),
   discoverPlatformApps: vi.fn(),
   savePlatformApp: vi.fn(),
+  settings: vi.fn(),
+  setSetting: vi.fn(),
+  discoverSteam: vi.fn(),
+  setSteamPath: vi.fn(),
   openPath: vi.fn(),
 }));
 
@@ -54,6 +58,10 @@ describe("PlatformsPage", () => {
     mocks.launchSoftware.mockResolvedValue(undefined);
     mocks.discoverPlatformApps.mockResolvedValue([]);
     mocks.savePlatformApp.mockResolvedValue(undefined);
+    mocks.settings.mockResolvedValue({});
+    mocks.setSetting.mockResolvedValue(undefined);
+    mocks.discoverSteam.mockResolvedValue(null);
+    mocks.setSteamPath.mockResolvedValue(undefined);
     mocks.openPath.mockResolvedValue(null);
   });
 
@@ -83,24 +91,25 @@ describe("PlatformsPage", () => {
     ]);
 
     render(<PlatformsPage notify={vi.fn()} />);
-    const launch = await screen.findByRole("button", { name: "启动软件" });
+    const fiveERow = (await screen.findByText("5E 对战平台")).closest("article")!;
+    const launch = fiveERow.querySelector(
+      'button[aria-label="启动软件"]',
+    ) as HTMLButtonElement;
     launch.click();
 
     expect(mocks.launchSoftware).toHaveBeenCalledWith("5e");
     expect(
-      screen.queryByRole("button", { name: "打开 5E 官网" }),
+      fiveERow.querySelector('button[aria-label="打开 5E 官网"]'),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "选择路径" }),
+      fiveERow.querySelector("button.compact-action"),
     ).not.toBeInTheDocument();
   });
 
   it("keeps the path chooser as a fallback for an undetected platform", async () => {
     render(<PlatformsPage notify={vi.fn()} />);
 
-    expect(
-      await screen.findByRole("button", { name: "选择路径" }),
-    ).toBeInTheDocument();
+    expect((await screen.findAllByRole("button", { name: "选择路径" })).length).toBeGreaterThan(0);
   });
 
   it("allows an undetected TeamSpeak client to be selected manually", async () => {
@@ -118,7 +127,8 @@ describe("PlatformsPage", () => {
     mocks.openPath.mockResolvedValue(executable);
 
     render(<PlatformsPage notify={vi.fn()} />);
-    (await screen.findByRole("button", { name: "选择路径" })).click();
+    const teamSpeakRow = (await screen.findByText("TeamSpeak 3")).closest("article");
+    (teamSpeakRow?.querySelector("button.compact-action") as HTMLButtonElement).click();
 
     await waitFor(() =>
       expect(mocks.savePlatformApp).toHaveBeenCalledWith({
@@ -129,6 +139,40 @@ describe("PlatformsPage", () => {
         workingDirectory: "D:\\Voice\\TeamSpeak 3 Client",
         prelaunchCheck: true,
       }),
+    );
+  });
+
+  it("shows all platforms in the default order and persists drag reordering", async () => {
+    render(<PlatformsPage notify={vi.fn()} />);
+    await screen.findByText("Steam");
+    const names = Array.from(document.querySelectorAll(".software-info h3")).map(
+      (node) => node.textContent,
+    );
+    expect(names).toEqual([
+      "Steam",
+      "5E 对战平台",
+      "完美世界竞技平台",
+      "TeamSpeak 3",
+    ]);
+
+    const source = screen.getByRole("button", { name: "调整 TeamSpeak 3 的顺序" });
+    const target = screen.getByText("Steam").closest("article")!;
+    const data = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: "none",
+      setData: (type: string, value: string) => data.set(type, value),
+      getData: (type: string) => data.get(type) ?? "",
+    };
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
+
+    await waitFor(() =>
+      expect(mocks.setSetting).toHaveBeenCalledWith("platform_order", [
+        "teamspeak3",
+        "steam",
+        "5e",
+        "perfectworld",
+      ]),
     );
   });
 

@@ -707,6 +707,7 @@ fn set_setting(state: State<AppState>, key: String, value: Value) -> AppResult<(
         "backup_directory",
         "theme",
         "steam_path",
+        "platform_order",
         "cfg_command_definitions",
     ];
     if !allowed.contains(&key.as_str()) {
@@ -1102,6 +1103,24 @@ fn start_software_download(
 }
 
 fn resolve_software_app(state: &AppState, code: &str) -> AppResult<PlatformApp> {
+    if code == "steam" {
+        let directory = steam_path(state)?;
+        let executable = directory.join("steam.exe");
+        if !executable.is_file() {
+            return Err(AppError::new(
+                "SOFTWARE_NOT_INSTALLED",
+                "Steam 安装目录中未找到 steam.exe",
+            ));
+        }
+        return Ok(PlatformApp {
+            platform_code: "steam".into(),
+            name: "Steam".into(),
+            executable_path: executable.to_string_lossy().into_owned(),
+            arguments: Vec::new(),
+            working_directory: Some(directory.to_string_lossy().into_owned()),
+            prelaunch_check: false,
+        });
+    }
     if code == "teamspeak3" {
         let configured = state.db.list_platform_apps()?;
         return resolve_teamspeak_app(&configured)
