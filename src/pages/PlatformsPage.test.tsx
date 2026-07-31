@@ -173,14 +173,9 @@ describe("PlatformsPage", () => {
 
     const source = screen.getByRole("button", { name: "调整 TeamSpeak 3 的顺序" });
     const target = screen.getByText("Steam").closest("article")!;
-    const data = new Map<string, string>();
-    const dataTransfer = {
-      effectAllowed: "none",
-      setData: (type: string, value: string) => data.set(type, value),
-      getData: (type: string) => data.get(type) ?? "",
-    };
-    fireEvent.dragStart(source, { dataTransfer });
-    fireEvent.drop(target, { dataTransfer });
+    fireEvent.pointerDown(source, { button: 0, buttons: 1 });
+    fireEvent.pointerEnter(target, { buttons: 1 });
+    fireEvent.pointerUp(document);
 
     await waitFor(() =>
       expect(mocks.setSetting).toHaveBeenCalledWith("platform_order", [

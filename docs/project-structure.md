@@ -97,7 +97,8 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 | 模块 | 职责 |
 | --- | --- |
 | `database.rs` | SQLite 初始化、查询和写入；账号、标签、平台关联、缓存、CFG、设置和日志持久化 |
-| `steam/mod.rs` | Steam 目录发现与校验、账号读取、进程控制、注册表状态、切号、静态及动态头像原文件缓存和平台客户端发现 |
+| `steam/mod.rs` | Steam 目录发现与校验、账号读取、进程控制、注册表状态、切号、本地头像原文件缓存和平台客户端发现 |
+| `steam/profile_media.rs` | 从公开 Steam 社区资料发现动态头像与头像框，校验 Steam 静态资源域名并原样缓存 |
 | `steam/vdf.rs` | Valve VDF 解析 |
 | `cs2.rs` | CS2 安装发现、CFG 方案文件、部署与校验 |
 | `player_query.rs` | 5E/完美世界玩家数据请求、重试、定级与赛季排名解析和稳定错误映射 |

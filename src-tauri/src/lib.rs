@@ -39,6 +39,7 @@ pub struct AppState {
     data_dir: PathBuf,
     switch_lock: AtomicBool,
     launch_lock: Mutex<()>,
+    profile_media_lock: Mutex<()>,
     login_sessions: Mutex<BTreeMap<String, LoginSessionRecord>>,
     downloads: Arc<Mutex<BTreeMap<String, DownloadProgress>>>,
 }
@@ -143,12 +144,28 @@ fn scan_accounts(state: State<AppState>) -> AppResult<usize> {
     sync_local_accounts(&state, &steam_path(&state)?)
 }
 #[tauri::command]
+fn refresh_steam_profile_media(state: State<AppState>, force: bool) -> AppResult<usize> {
+    let Some(_guard) = state.profile_media_lock.try_lock() else {
+        return Ok(0);
+    };
+    let steam_ids = state
+        .db
+        .list_accounts()?
+        .into_iter()
+        .map(|account| account.steam_id64)
+        .collect::<Vec<_>>();
+    steam::profile_media::sync(&state.data_dir.join("avatars"), &steam_ids, force)
+}
+#[tauri::command]
 fn list_accounts(state: State<AppState>) -> AppResult<Vec<Account>> {
     let mut accounts = state.db.list_accounts()?;
     let avatar_root = state.data_dir.join("avatars");
     for account in &mut accounts {
         if let Some(path) = steam::avatar_path(&avatar_root, &account.steam_id64) {
             account.avatar_path = Some(path.to_string_lossy().into_owned());
+        }
+        if let Some(path) = steam::profile_media::frame_path(&avatar_root, &account.steam_id64) {
+            account.avatar_frame_path = Some(path.to_string_lossy().into_owned());
         }
     }
     Ok(accounts)
@@ -1283,6 +1300,7 @@ pub fn run() {
                 data_dir,
                 switch_lock: AtomicBool::new(false),
                 launch_lock: Mutex::new(()),
+                profile_media_lock: Mutex::new(()),
                 login_sessions: Mutex::new(BTreeMap::new()),
                 downloads: Arc::new(Mutex::new(BTreeMap::new())),
             });
@@ -1294,6 +1312,7 @@ pub fn run() {
             discover_steam,
             set_steam_path,
             scan_accounts,
+            refresh_steam_profile_media,
             list_accounts,
             save_profile,
             list_tags,

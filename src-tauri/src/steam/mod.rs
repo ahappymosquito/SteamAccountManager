@@ -1,4 +1,5 @@
 //! Windows Steam discovery, process control, backups and safe local switching.
+pub mod profile_media;
 pub mod vdf;
 use crate::error::{AppError, AppResult};
 use crate::models::{Cs2Config, CurrentStatus, LocalSteamAccount, PlatformApp};
@@ -489,13 +490,6 @@ pub fn sync_avatar_cache(
         if fs::read(&destination).ok().as_deref() != Some(bytes.as_slice()) {
             fs::write(&destination, bytes)?;
         }
-        for stale_extension in ["gif", "webp", "png", "jpg", "jpeg"] {
-            if stale_extension != extension {
-                let _ = fs::remove_file(
-                    cache_root.join(format!("{}.{}", account.steam_id64, stale_extension)),
-                );
-            }
-        }
         synced += 1;
     }
     Ok(synced)
@@ -529,7 +523,7 @@ fn find_avatar_source(source_root: &Path, steam_id64: &str) -> Option<PathBuf> {
         })
 }
 
-fn avatar_extension(bytes: &[u8]) -> Option<&'static str> {
+pub(super) fn avatar_extension(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
         Some("gif")
     } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {

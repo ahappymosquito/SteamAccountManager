@@ -13,6 +13,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import { usePointerReorder } from "../lib/pointerReorder";
 import type {
   AppError,
   DownloadProgress,
@@ -100,7 +101,6 @@ export function PlatformsPage({
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [detecting, setDetecting] = useState(false);
   const [launching, setLaunching] = useState<string>();
-  const [dragging, setDragging] = useState<PlatformCode>();
 
   const load = async () => {
     const [statuses, downloads, settings] = await Promise.all([
@@ -260,6 +260,9 @@ export function PlatformsPage({
       await load();
     }
   };
+  const pointerSort = usePointerReorder((source, target) => {
+    void reorder(source as PlatformCode, target as PlatformCode);
+  });
 
   return (
     <section>
@@ -288,29 +291,21 @@ export function PlatformsPage({
             : undefined;
           return (
             <article
-              className={`software-row${dragging === item.code ? " dragging" : ""}`}
+              className={`software-row${
+                pointerSort.draggingId === item.code ? " dragging" : ""
+              }${
+                pointerSort.targetId === item.code ? " drop-target" : ""
+              }`}
               key={item.code}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                const source =
-                  (event.dataTransfer.getData("text/plain") as PlatformCode) || dragging;
-                if (source) void reorder(source, item.code);
-                setDragging(undefined);
-              }}
+              onPointerEnter={(event) => pointerSort.enter(item.code, event)}
             >
               <button
                 type="button"
                 className="software-drag-handle"
-                draggable
+                aria-grabbed={pointerSort.draggingId === item.code}
                 aria-label={`调整 ${item.name} 的顺序`}
                 title="拖拽排序"
-                onDragStart={(event) => {
-                  setDragging(item.code);
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("text/plain", item.code);
-                }}
-                onDragEnd={() => setDragging(undefined)}
+                onPointerDown={(event) => pointerSort.start(item.code, event)}
               >
                 <GripVertical />
               </button>

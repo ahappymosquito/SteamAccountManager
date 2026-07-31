@@ -8,6 +8,7 @@ export const api = {
   discoverSteam: () => invoke<string | null>("discover_steam"),
   setSteamPath: (path:string) => invoke<void>("set_steam_path", { path }),
   scan: () => invoke<number>("scan_accounts"),
+  refreshSteamProfileMedia: (force=false) => invoke<number>("refresh_steam_profile_media",{force}),
   status: () => invoke<CurrentStatus>("current_status"),
   saveProfile: (input:ProfileInput) => invoke<void>("save_profile", { input }),
   tags: () => invoke<TagOption[]>("list_tags"),

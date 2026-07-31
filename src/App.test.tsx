@@ -103,6 +103,19 @@ describe("AccountsPage ranking controls", () => {
       .not.toBeInTheDocument();
   });
 
+  it("renders the cached Steam avatar frame above the avatar", () => {
+    const framed = {
+      ...account,
+      avatarFramePath: "C:\\app\\avatars\\76561198000000001.frame.png",
+    };
+    const { container } = render(<AccountAvatar account={framed} />);
+
+    expect(container.querySelector(".avatar-frame")).toHaveAttribute(
+      "src",
+      `asset://${framed.avatarFramePath}`,
+    );
+  });
+
   it("enables keyboard reordering only for the clean custom list", () => {
     const onReorder = vi.fn();
     const second = {
@@ -124,8 +137,17 @@ describe("AccountsPage ranking controls", () => {
       name: "调整 Player 的顺序",
     });
     expect(handle).toBeEnabled();
-    expect(handle).toHaveAttribute("draggable", "true");
+    expect(handle).not.toHaveAttribute("draggable");
     expect(handle.closest("article")).not.toHaveAttribute("draggable", "true");
+    const secondRow = screen.getByText("Second").closest("article")!;
+    fireEvent.pointerDown(handle, { button: 0, buttons: 1 });
+    fireEvent.pointerEnter(secondRow, { buttons: 1 });
+    fireEvent.pointerUp(document);
+    expect(onReorder).toHaveBeenCalledWith(
+      account.steamId64,
+      second.steamId64,
+    );
+    onReorder.mockClear();
     fireEvent.keyDown(handle, { key: "ArrowDown", altKey: true });
     expect(onReorder).toHaveBeenCalledWith(
       account.steamId64,

@@ -38,6 +38,7 @@ import {
   normalizeAccountOrder,
   sortAccounts,
 } from "./lib/filter";
+import { usePointerReorder } from "./lib/pointerReorder";
 import { applyTheme, resolveTheme, savedTheme, storedTheme } from "./lib/themes";
 import { switchResultNotice } from "./lib/switchResult";
 import type {
@@ -139,6 +140,10 @@ export default function App() {
         notify("error", errorMessage(error));
       } finally {
         await load();
+        void api
+          .refreshSteamProfileMedia(false)
+          .then(() => load(false, false))
+          .catch(() => {});
       }
     };
     void restoreTheme();
@@ -248,6 +253,7 @@ export default function App() {
   const scan = async () => {
     try {
       const count = await api.scan();
+      await api.refreshSteamProfileMedia(true);
       await load();
       notify("success", `已同步 ${count} 个本机 Steam 账号`);
     } catch (error) {
@@ -532,7 +538,6 @@ export function AccountsPage({
   onSwitch: (account: Account) => void;
   onFavorite: (account: Account) => void;
 }) {
-  const [draggingId, setDraggingId] = useState<string>();
   const reorderEnabled =
     !ui.query.trim() &&
     !ui.favoriteOnly &&
@@ -545,6 +550,7 @@ export function AccountsPage({
     const target = accounts[index + offset];
     if (target) onReorder(account.steamId64, target.steamId64);
   };
+  const pointerSort = usePointerReorder(onReorder);
 
   return (
     <section>
@@ -639,27 +645,27 @@ export function AccountsPage({
           {accounts.map((account) => (
             <article
               className={`account-row clickable${
-                draggingId === account.steamId64 ? " dragging" : ""
+                pointerSort.draggingId === account.steamId64 ? " dragging" : ""
+              }${
+                pointerSort.targetId === account.steamId64 ? " drop-target" : ""
               }`}
               key={account.id}
-              onDragOver={(event) => {
-                if (reorderEnabled) event.preventDefault();
+              onPointerEnter={(event) => {
+                if (reorderEnabled) {
+                  pointerSort.enter(account.steamId64, event);
+                }
               }}
-              onDrop={(event) => {
-                if (!reorderEnabled) return;
-                event.preventDefault();
-                const sourceId =
-                  event.dataTransfer.getData("text/plain") || draggingId;
-                if (sourceId) onReorder(sourceId, account.steamId64);
-                setDraggingId(undefined);
+              onClick={() => {
+                if (!pointerSort.consumeClick()) onDetails(account);
               }}
-              onClick={() => onDetails(account)}
             >
               <button
                 type="button"
                 className="account-drag-handle"
                 disabled={!reorderEnabled}
-                draggable={reorderEnabled}
+                aria-grabbed={
+                  pointerSort.draggingId === account.steamId64
+                }
                 aria-label={`调整 ${account.personaName || "未命名 Steam 账号"} 的顺序`}
                 title={
                   reorderEnabled
@@ -667,16 +673,10 @@ export function AccountsPage({
                     : "清除筛选后可调整顺序"
                 }
                 onClick={(event) => event.stopPropagation()}
-                onDragStart={(event) => {
-                  if (!reorderEnabled) return;
-                  event.stopPropagation();
-                  setDraggingId(account.steamId64);
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("text/plain", account.steamId64);
-                }}
-                onDragEnd={(event) => {
-                  event.stopPropagation();
-                  setDraggingId(undefined);
+                onPointerDown={(event) => {
+                  if (reorderEnabled) {
+                    pointerSort.start(account.steamId64, event);
+                  }
                 }}
                 onKeyDown={(event) => {
                   if (!reorderEnabled || !event.altKey) return;

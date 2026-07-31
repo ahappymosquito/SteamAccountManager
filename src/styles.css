@@ -180,7 +180,7 @@ button.platform-badge.linked{gap:5px;max-width:280px;padding:3px 7px;border-colo
 .account-row.dragging{opacity:.46;background:var(--selected)}
 .account-drag-handle{width:26px;height:34px;display:grid;place-items:center;align-self:center;padding:0;border:0;background:transparent;color:var(--muted);cursor:grab}
 .account-drag-handle:active{cursor:grabbing}.account-drag-handle:disabled{opacity:.2;cursor:not-allowed}.account-drag-handle svg{width:15px;height:15px}
-.account-drag-handle[draggable="true"]{touch-action:none;user-select:none;-webkit-user-drag:element}
+.account-drag-handle{touch-action:none;user-select:none}
 .account-main{min-width:0}.account-title h2{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .account-platform-status{justify-self:start;width:100%}.account-platform-status .platform-badges{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));justify-content:stretch;gap:7px}
 button.platform-badge{min-width:0;min-height:34px;max-width:none;display:flex;align-items:center;gap:6px;padding:5px 8px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--muted);text-align:left}
@@ -222,5 +222,14 @@ button.platform-badge.invalid{border-color:color-mix(in oklch,var(--danger),var(
 .software-drag-handle:active{cursor:grabbing}
 .software-drag-handle svg{width:15px;height:15px}
 .software-row.dragging{opacity:.55}
+.account-row.drop-target,.software-row.drop-target{background:var(--selected)}
 @media(max-width:1100px){.software-row{grid-template-columns:24px 48px minmax(180px,1fr) auto}.software-actions{grid-column:3/-1}}
 @media(max-width:820px){.software-row{grid-template-columns:24px 44px 1fr}.software-status,.software-actions{grid-column:3}}
+
+/* Steam profile frames sit outside the cropped avatar image without intercepting input. */
+.avatar{position:relative;overflow:visible}
+.avatar-content{width:100%;height:100%;display:grid;place-items:center;overflow:hidden;border-radius:inherit}
+.avatar-content>img{display:block;width:100%;height:100%;object-fit:cover}
+.avatar.neutral{background:transparent;border:0}
+.avatar.neutral .avatar-content{background:var(--raised);color:var(--ink);border:1px solid var(--line)}
+.avatar>.avatar-frame{position:absolute;z-index:1;inset:-9%;width:118%;height:118%;object-fit:contain;pointer-events:none}
