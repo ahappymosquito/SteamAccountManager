@@ -63,11 +63,18 @@ const catalog: Record<PlatformCode, SoftwareStatus> = {
 };
 
 const officialIcons: Record<PlatformCode, string> = {
-  steam: "/app-icon.png",
+  steam: "/platforms/steam.ico",
   perfectworld: "/platforms/perfectworld.ico",
   "5e": "/platforms/5e.png",
   teamspeak3: "/platforms/teamspeak.png",
 };
+
+export function formatWindowsPath(value: string): string {
+  const normalized = value.trim().replace(/^"(.*)"$/, "$1").replace(/\//g, "\\");
+  return /^[a-z]:/.test(normalized)
+    ? `${normalized[0].toUpperCase()}${normalized.slice(1)}`
+    : normalized;
+}
 
 export function normalizePlatformOrder(value: unknown): PlatformCode[] {
   const requested = Array.isArray(value)
@@ -101,9 +108,17 @@ export function PlatformsPage({
       api.downloadProgress(),
       api.settings(),
     ]);
-    const configuredSteam = String(settings.steam_path ?? "").replace(/^"|"$/g, "");
+    const configuredSteam = formatWindowsPath(String(settings.steam_path ?? ""));
     const byCode = new Map<PlatformCode, SoftwareStatus>(
-      statuses.map((item) => [item.code, item]),
+      statuses.map((item) => [
+        item.code,
+        {
+          ...item,
+          executablePath: item.executablePath
+            ? formatWindowsPath(item.executablePath)
+            : undefined,
+        },
+      ]),
     );
     byCode.set("steam", {
       ...catalog.steam,
@@ -174,16 +189,17 @@ export function PlatformsPage({
           },
     );
     if (typeof selected !== "string") return;
+    const normalizedPath = formatWindowsPath(selected);
     try {
       if (item.code === "steam") {
-        await api.setSteamPath(selected);
+        await api.setSteamPath(normalizedPath);
       } else {
         const app: PlatformApp = {
           platformCode: item.code as PlatformApp["platformCode"],
           name: item.name,
-          executablePath: selected,
+          executablePath: normalizedPath,
           arguments: [],
-          workingDirectory: selected.replace(/[\\/][^\\/]+$/, ""),
+          workingDirectory: normalizedPath.replace(/[\\][^\\]+$/, ""),
           prelaunchCheck: true,
         };
         await api.savePlatformApp(app);

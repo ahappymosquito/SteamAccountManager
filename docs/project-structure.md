@@ -43,7 +43,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 | `src/` | React WebView 前端、页面、组件、状态和纯 TypeScript 领域逻辑 |
 | `src-tauri/` | Tauri/Rust 桌面后端、SQLite、Steam/CS2/平台集成和 Windows 打包配置 |
 | `tests/fixtures/` | Steam `loginusers.vdf` 解析测试数据 |
-| `public/` | 应用图标和平台品牌静态资源 |
+| `public/` | 应用图标及 Steam、5E、完美、TeamSpeak 平台品牌静态资源 |
 | `scripts/` | 图标校验与 Windows 双产物归档脚本 |
 | `docs/` | 平台调研、配置资料和项目结构文档 |
 | `release/` | 本地交付的安装版与便携版；二进制不提交 Git |
@@ -97,7 +97,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 | 模块 | 职责 |
 | --- | --- |
 | `database.rs` | SQLite 初始化、查询和写入；账号、标签、平台关联、缓存、CFG、设置和日志持久化 |
-| `steam/mod.rs` | Steam 目录发现与校验、账号读取、进程控制、注册表状态、切号、头像缓存和平台客户端发现 |
+| `steam/mod.rs` | Steam 目录发现与校验、账号读取、进程控制、注册表状态、切号、静态及动态头像原文件缓存和平台客户端发现 |
 | `steam/vdf.rs` | Valve VDF 解析 |
 | `cs2.rs` | CS2 安装发现、CFG 方案文件、部署与校验 |
 | `player_query.rs` | 5E/完美世界玩家数据请求、重试、定级与赛季排名解析和稳定错误映射 |

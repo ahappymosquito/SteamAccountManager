@@ -476,7 +476,7 @@ pub fn sync_avatar_cache(
         let Ok(metadata) = fs::metadata(&source) else {
             continue;
         };
-        if !metadata.is_file() || metadata.len() > 2 * 1024 * 1024 {
+        if !metadata.is_file() || metadata.len() > 8 * 1024 * 1024 {
             continue;
         }
         let Ok(bytes) = fs::read(&source) else {
@@ -487,7 +487,14 @@ pub fn sync_avatar_cache(
         };
         let destination = cache_root.join(format!("{}.{}", account.steam_id64, extension));
         if fs::read(&destination).ok().as_deref() != Some(bytes.as_slice()) {
-            fs::write(destination, bytes)?;
+            fs::write(&destination, bytes)?;
+        }
+        for stale_extension in ["gif", "webp", "png", "jpg", "jpeg"] {
+            if stale_extension != extension {
+                let _ = fs::remove_file(
+                    cache_root.join(format!("{}.{}", account.steam_id64, stale_extension)),
+                );
+            }
         }
         synced += 1;
     }
@@ -496,7 +503,7 @@ pub fn sync_avatar_cache(
 
 fn find_avatar_source(source_root: &Path, steam_id64: &str) -> Option<PathBuf> {
     for suffix in ["_full", "", "_medium", "_small"] {
-        for extension in ["jpg", "jpeg", "png"] {
+        for extension in ["gif", "webp", "png", "jpg", "jpeg"] {
             let candidate = source_root.join(format!("{steam_id64}{suffix}.{extension}"));
             if candidate.is_file() {
                 return Some(candidate);
@@ -523,7 +530,11 @@ fn find_avatar_source(source_root: &Path, steam_id64: &str) -> Option<PathBuf> {
 }
 
 fn avatar_extension(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("png")
     } else if bytes.starts_with(b"\xff\xd8\xff") {
         Some("jpg")
@@ -533,7 +544,7 @@ fn avatar_extension(bytes: &[u8]) -> Option<&'static str> {
 }
 
 pub fn avatar_path(cache_root: &Path, steam_id64: &str) -> Option<PathBuf> {
-    ["jpg", "png", "jpeg"]
+    ["gif", "webp", "png", "jpg", "jpeg"]
         .into_iter()
         .map(|extension| cache_root.join(format!("{steam_id64}.{extension}")))
         .find(|path| path.is_file())
@@ -1258,6 +1269,31 @@ mod atomic_write_tests {
             fs::read(cache.path().join(format!("{steam_id}.png"))).expect("updated cache"),
             second
         );
+    }
+
+    #[test]
+    fn copies_animated_gif_avatar_without_flattening_it() {
+        let steam = tempfile::tempdir().expect("steam directory");
+        let cache = tempfile::tempdir().expect("avatar cache");
+        let source = steam.path().join("config/avatarcache");
+        fs::create_dir_all(&source).expect("create avatar source");
+        let steam_id = "76561198000000004";
+        let animated_gif = b"GIF89a\x01\x00\x01\x00animated-frames";
+        fs::write(source.join(format!("{steam_id}_full.gif")), animated_gif)
+            .expect("write animated avatar");
+
+        assert_eq!(
+            sync_avatar_cache(
+                steam.path(),
+                cache.path(),
+                &[account(steam_id, true, true, true)]
+            )
+            .expect("sync"),
+            1
+        );
+        let cached = cache.path().join(format!("{steam_id}.gif"));
+        assert_eq!(fs::read(&cached).expect("cached avatar"), animated_gif);
+        assert_eq!(avatar_path(cache.path(), steam_id), Some(cached));
     }
 
     #[test]

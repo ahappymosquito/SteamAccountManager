@@ -29,7 +29,16 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.openPath }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
-import { PlatformsPage } from "./PlatformsPage";
+import { formatWindowsPath, PlatformsPage } from "./PlatformsPage";
+
+it("normalizes Windows paths for consistent display", () => {
+  expect(formatWindowsPath("c:/program files/Steam")).toBe(
+    "C:\\program files\\Steam",
+  );
+  expect(formatWindowsPath("D:\\Voice/TeamSpeak")).toBe(
+    "D:\\Voice\\TeamSpeak",
+  );
+});
 
 describe("PlatformsPage", () => {
   afterEach(cleanup);
@@ -143,6 +152,9 @@ describe("PlatformsPage", () => {
   });
 
   it("shows all platforms in the default order and persists drag reordering", async () => {
+    mocks.settings.mockResolvedValue({
+      steam_path: "c:/program files/Steam",
+    });
     render(<PlatformsPage notify={vi.fn()} />);
     await screen.findByText("Steam");
     const names = Array.from(document.querySelectorAll(".software-info h3")).map(
@@ -154,6 +166,10 @@ describe("PlatformsPage", () => {
       "完美世界竞技平台",
       "TeamSpeak 3",
     ]);
+    expect(
+      screen.getByText("Steam").closest("article")?.querySelector("img"),
+    ).toHaveAttribute("src", "/platforms/steam.ico");
+    expect(screen.getByText("C:\\program files\\Steam")).toBeInTheDocument();
 
     const source = screen.getByRole("button", { name: "调整 TeamSpeak 3 的顺序" });
     const target = screen.getByText("Steam").closest("article")!;
