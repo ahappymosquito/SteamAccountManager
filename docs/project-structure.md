@@ -63,6 +63,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 - `pages/Cs2Page.tsx`：CFG 方案、可视化命令编辑、源码编辑与导入导出。
 - `pages/PlatformsPage.tsx`：平台客户端发现、下载、路径配置和启动。
 - `pages/SettingsPage.tsx`：Steam 路径、超时、主题、平台凭据、数据导入导出、备份恢复和应用更新。
+- 软件备份导出保持全量；恢复命令接收分类选择，并在数据库层按 SteamID64 将账号资料映射到本机当前可用账号。
 - 账号列表与切换日志目前仍由 `App.tsx` 内部的 `AccountsPage`、`LogsPage` 实现。
 
 ### 组件

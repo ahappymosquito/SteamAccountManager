@@ -49,13 +49,16 @@ export function AccountPlatformBadges({
       {fixedPlatforms.map((code) => {
         const linked = account.platformCodes.includes(code);
         const name = platformAccountName(account, code);
+        const invalid = account.platformSummaries?.some(
+          (item) => item.platformCode === code && item.status === "invalid",
+        );
         const title = [platformLabels[code], name].filter(Boolean).join(" · ");
         return (
           <button
             type="button"
             className={`platform-badge platform-shortcut${
               linked ? " linked" : " unlinked"
-            }`}
+            }${invalid ? " invalid" : ""}`}
             key={code}
             title={title}
             onClick={(event) => {

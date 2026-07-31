@@ -41,6 +41,7 @@ pub struct PlatformSummary {
     pub platform_code: String,
     pub display_name: Option<String>,
     pub external_id: Option<String>,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -251,6 +252,18 @@ pub struct ImportPreview {
     pub account_count: usize,
     pub platform_link_count: usize,
     pub cfg_profile_count: usize,
+    pub matched_account_count: usize,
+    pub skipped_account_count: usize,
+    pub matched_platform_link_count: usize,
+    pub setting_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreSelection {
+    pub accounts: bool,
+    pub cfg: bool,
+    pub settings: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

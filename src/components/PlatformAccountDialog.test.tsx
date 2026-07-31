@@ -100,6 +100,33 @@ describe("PlatformAccountDialog", () => {
     expect(mocks.playerData).toHaveBeenCalledWith("new-link", true);
   });
 
+  it("closes after the profile is saved even when the player query fails", async () => {
+    const onOpenChange = vi.fn();
+    mocks.playerData.mockRejectedValue(new Error("玩家不存在"));
+    renderDialog("5e", { onOpenChange });
+    fireEvent.change(await screen.findByLabelText("平台用户名"), {
+      target: { value: "可能输错的用户名" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存并查询" }));
+
+    await waitFor(() => expect(mocks.saveLink).toHaveBeenCalled());
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(mocks.saveLink).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "invalid" }),
+    );
+  });
+
+  it("closes after a database save failure instead of trapping the user", async () => {
+    const onOpenChange = vi.fn();
+    mocks.saveLink.mockRejectedValueOnce(new Error("写入失败"));
+    renderDialog("5e", { onOpenChange });
+    fireEvent.change(await screen.findByLabelText("平台用户名"), {
+      target: { value: "玩家" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存并查询" }));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
   it("preserves an existing link ID and supports password reveal and copy", async () => {
     mocks.links.mockResolvedValue([existing]);
     renderDialog("5e");

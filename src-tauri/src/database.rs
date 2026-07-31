@@ -12,6 +12,7 @@ use rusqlite::{
     Connection, OptionalExtension,
 };
 use serde_json::{json, Map, Value};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -263,7 +264,278 @@ impl Database {
             account_count: count("steam_accounts"),
             platform_link_count: count("account_platform_links"),
             cfg_profile_count: count("cfg_profiles"),
+            matched_account_count: count("steam_accounts"),
+            skipped_account_count: 0,
+            matched_platform_link_count: count("account_platform_links"),
+            setting_count: count("app_settings") + count("platform_apps"),
         })
+    }
+
+    pub fn preview_backup_for_restore(
+        &self,
+        document: &Value,
+    ) -> AppResult<crate::models::ImportPreview> {
+        let mut preview = Self::preview_backup(document)?;
+        let tables = backup_tables(document)?;
+        let conn = self.0.lock();
+        let mut local =
+            conn.prepare("SELECT id,steam_id64 FROM steam_accounts WHERE local_available=1")?;
+        let local_by_steam: HashMap<String, String> = local
+            .query_map([], |row| Ok((row.get(1)?, row.get(0)?)))?
+            .collect::<Result<_, _>>()?;
+        let imported_accounts = tables["steam_accounts"]
+            .as_array()
+            .expect("validated accounts");
+        let matched_ids: HashSet<String> = imported_accounts
+            .iter()
+            .filter_map(|row| {
+                let object = row.as_object()?;
+                local_by_steam
+                    .contains_key(object.get("steam_id64")?.as_str()?)
+                    .then(|| object.get("id")?.as_str().map(str::to_string))
+                    .flatten()
+            })
+            .collect();
+        preview.matched_account_count = matched_ids.len();
+        preview.skipped_account_count = preview.account_count - preview.matched_account_count;
+        preview.matched_platform_link_count = tables["account_platform_links"]
+            .as_array()
+            .expect("validated links")
+            .iter()
+            .filter(|row| {
+                row.get("steam_account_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| matched_ids.contains(id))
+            })
+            .count();
+        Ok(preview)
+    }
+
+    pub fn restore_backup_selected(
+        &self,
+        document: &Value,
+        selection: crate::models::RestoreSelection,
+    ) -> AppResult<crate::models::ImportPreview> {
+        let preview = self.preview_backup_for_restore(document)?;
+        if !selection.accounts && !selection.cfg && !selection.settings {
+            return Err(AppError::new(
+                "BACKUP_SELECTION_EMPTY",
+                "请至少选择一类资料",
+            ));
+        }
+        let imported = backup_tables(document)?;
+        let mut merged = self.export_backup()?;
+        let current = merged["tables"]
+            .as_object_mut()
+            .expect("current backup tables");
+        let current_accounts = current["steam_accounts"]
+            .as_array()
+            .expect("current accounts");
+        let local_by_steam: HashMap<String, String> = current_accounts
+            .iter()
+            .filter(|row| row.get("local_available").and_then(Value::as_i64) == Some(1))
+            .filter_map(|row| {
+                Some((
+                    row.get("steam_id64")?.as_str()?.to_string(),
+                    row.get("id")?.as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        let account_mapping: HashMap<String, String> = imported["steam_accounts"]
+            .as_array()
+            .expect("imported accounts")
+            .iter()
+            .filter_map(|row| {
+                Some((
+                    row.get("id")?.as_str()?.to_string(),
+                    local_by_steam
+                        .get(row.get("steam_id64")?.as_str()?)?
+                        .clone(),
+                ))
+            })
+            .collect();
+        let matched_local: HashSet<String> = account_mapping.values().cloned().collect();
+        let remap_account_rows = |table: &str| {
+            imported[table]
+                .as_array()
+                .expect("validated table")
+                .iter()
+                .filter_map(|row| {
+                    let mut row = row.as_object()?.clone();
+                    let local_id = account_mapping.get(row.get("steam_account_id")?.as_str()?)?;
+                    row.insert("steam_account_id".into(), Value::String(local_id.clone()));
+                    Some(Value::Object(row))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        if selection.accounts {
+            let mut profiles = current["account_profiles"]
+                .as_array()
+                .expect("current profiles")
+                .iter()
+                .filter(|row| {
+                    row.get("steam_account_id")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| !matched_local.contains(id))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            profiles.extend(remap_account_rows("account_profiles"));
+            current.insert("account_profiles".into(), Value::Array(profiles));
+
+            let mut tags = current["tags"].as_array().expect("current tags").clone();
+            let mut tag_by_name: HashMap<String, String> = tags
+                .iter()
+                .filter_map(|row| {
+                    Some((
+                        row.get("name")?.as_str()?.to_lowercase(),
+                        row.get("id")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect();
+            let imported_tags: HashMap<String, &Value> = imported["tags"]
+                .as_array()
+                .expect("imported tags")
+                .iter()
+                .filter_map(|row| Some((row.get("id")?.as_str()?.to_string(), row)))
+                .collect();
+            let mut account_tags = current["account_tags"]
+                .as_array()
+                .expect("current account tags")
+                .iter()
+                .filter(|row| {
+                    row.get("steam_account_id")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| !matched_local.contains(id))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for row in imported["account_tags"]
+                .as_array()
+                .expect("imported account tags")
+            {
+                let Some(local_id) = row
+                    .get("steam_account_id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| account_mapping.get(id))
+                else {
+                    continue;
+                };
+                let imported_tag_id = row
+                    .get("tag_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AppError::new("BACKUP_INVALID", "标签关联缺少 tag_id"))?;
+                let tag = imported_tags
+                    .get(imported_tag_id)
+                    .ok_or_else(|| AppError::new("BACKUP_INVALID", "标签关联引用不存在"))?;
+                let name = tag["name"]
+                    .as_str()
+                    .ok_or_else(|| AppError::new("BACKUP_INVALID", "标签名称无效"))?;
+                let actual_tag_id = if let Some(id) = tag_by_name.get(&name.to_lowercase()) {
+                    id.clone()
+                } else {
+                    let id = Uuid::new_v4().to_string();
+                    let mut created = tag.as_object().expect("tag object").clone();
+                    created.insert("id".into(), Value::String(id.clone()));
+                    tags.push(Value::Object(created));
+                    tag_by_name.insert(name.to_lowercase(), id.clone());
+                    id
+                };
+                account_tags.push(json!({
+                    "steam_account_id": local_id,
+                    "tag_id": actual_tag_id,
+                }));
+            }
+            current.insert("tags".into(), Value::Array(tags));
+            current.insert("account_tags".into(), Value::Array(account_tags));
+
+            let retained_links = current["account_platform_links"]
+                .as_array()
+                .expect("current platform links")
+                .iter()
+                .filter(|row| {
+                    row.get("steam_account_id")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| !matched_local.contains(id))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let retained_platform_ids: HashSet<String> = retained_links
+                .iter()
+                .filter_map(|row| row.get("platform_account_id")?.as_str().map(str::to_string))
+                .collect();
+            let imported_platforms: HashMap<String, &Value> = imported["platform_accounts"]
+                .as_array()
+                .expect("imported platforms")
+                .iter()
+                .filter_map(|row| Some((row.get("id")?.as_str()?.to_string(), row)))
+                .collect();
+            let mut platform_accounts = current["platform_accounts"]
+                .as_array()
+                .expect("current platform accounts")
+                .iter()
+                .filter(|row| {
+                    row.get("id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| retained_platform_ids.contains(id))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut platform_links = retained_links;
+            for row in imported["account_platform_links"]
+                .as_array()
+                .expect("imported platform links")
+            {
+                let Some(local_id) = row
+                    .get("steam_account_id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| account_mapping.get(id))
+                else {
+                    continue;
+                };
+                let imported_platform_id = row["platform_account_id"]
+                    .as_str()
+                    .ok_or_else(|| AppError::new("BACKUP_INVALID", "平台关联无效"))?;
+                let platform = imported_platforms
+                    .get(imported_platform_id)
+                    .ok_or_else(|| AppError::new("BACKUP_INVALID", "平台账号引用不存在"))?;
+                let platform_id = Uuid::new_v4().to_string();
+                let mut platform = platform.as_object().expect("platform object").clone();
+                platform.insert("id".into(), Value::String(platform_id.clone()));
+                platform_accounts.push(Value::Object(platform));
+                let mut link = row.as_object().expect("link object").clone();
+                link.insert("id".into(), Value::String(Uuid::new_v4().to_string()));
+                link.insert("steam_account_id".into(), Value::String(local_id.clone()));
+                link.insert("platform_account_id".into(), Value::String(platform_id));
+                platform_links.push(Value::Object(link));
+            }
+            current.insert("platform_accounts".into(), Value::Array(platform_accounts));
+            current.insert(
+                "account_platform_links".into(),
+                Value::Array(platform_links),
+            );
+        }
+
+        if selection.cfg {
+            for table in ["cfg_profiles", "cfg_profile_versions"] {
+                current.insert(table.into(), imported[table].clone());
+            }
+            current.insert(
+                "account_cfg_profiles".into(),
+                Value::Array(remap_account_rows("account_cfg_profiles")),
+            );
+            current.insert(
+                "account_cfg_deployments".into(),
+                Value::Array(remap_account_rows("account_cfg_deployments")),
+            );
+        }
+        if selection.settings {
+            current.insert("app_settings".into(), imported["app_settings"].clone());
+            current.insert("platform_apps".into(), imported["platform_apps"].clone());
+        }
+        self.restore_backup(&merged)?;
+        Ok(preview)
     }
 
     pub fn restore_backup(&self, document: &Value) -> AppResult<crate::models::ImportPreview> {
@@ -371,7 +643,7 @@ impl Database {
                 .query_map([&account.id], |r| r.get(0))?
                 .collect::<Result<_, _>>()?;
             let mut summaries = conn.prepare(
-                "SELECT p.platform_code,p.display_name,p.external_id
+                "SELECT p.platform_code,p.display_name,p.external_id,p.status
                  FROM platform_accounts p
                  JOIN account_platform_links l ON l.platform_account_id=p.id
                  WHERE l.steam_account_id=?1
@@ -383,6 +655,7 @@ impl Database {
                         platform_code: row.get(0)?,
                         display_name: row.get(1)?,
                         external_id: row.get(2)?,
+                        status: row.get(3)?,
                     })
                 })?
                 .collect::<Result<_, _>>()?;
@@ -1409,6 +1682,86 @@ mod tests {
                 .expect("restored setting")
                 .as_deref(),
             Some("\"glacier\"")
+        );
+    }
+
+    #[test]
+    fn selective_restore_imports_only_locally_matched_steam_accounts() {
+        let source_dir = tempfile::tempdir().expect("source");
+        let source = Database::open(&source_dir.path().join("source.db")).expect("source db");
+        source
+            .sync_accounts(&[
+                local_account("76561198000000001"),
+                local_account("76561198000000002"),
+            ])
+            .expect("source scan");
+        for account in source.list_accounts().expect("source accounts") {
+            source
+                .save_link(&PlatformLinkInput {
+                    id: Some(format!("link-{}", account.steam_id64)),
+                    steam_account_id: account.id,
+                    platform_code: "5e".into(),
+                    external_id: Some(format!("玩家{}", account.steam_id64)),
+                    display_name: Some(format!("玩家{}", account.steam_id64)),
+                    profile_url: None,
+                    login_account: Some(format!("login-{}", account.steam_id64)),
+                    login_password: Some("plain-password".into()),
+                    remark: Some("导入备注".into()),
+                    status: "user_confirmed".into(),
+                })
+                .expect("source link");
+        }
+        source
+            .set_setting("theme", "\"glacier\"")
+            .expect("source theme");
+        let document = source.export_backup().expect("export");
+
+        let target_dir = tempfile::tempdir().expect("target");
+        let target = Database::open(&target_dir.path().join("target.db")).expect("target db");
+        target
+            .sync_accounts(&[
+                local_account("76561198000000001"),
+                local_account("76561198000000009"),
+            ])
+            .expect("target scan");
+        target
+            .set_setting("theme", "\"mint\"")
+            .expect("target theme");
+        let preview = target
+            .preview_backup_for_restore(&document)
+            .expect("matched preview");
+        assert_eq!(preview.matched_account_count, 1);
+        assert_eq!(preview.skipped_account_count, 1);
+        assert_eq!(preview.matched_platform_link_count, 1);
+
+        target
+            .restore_backup_selected(
+                &document,
+                crate::models::RestoreSelection {
+                    accounts: true,
+                    cfg: false,
+                    settings: false,
+                },
+            )
+            .expect("selective restore");
+        let accounts = target.list_accounts().expect("local accounts");
+        assert_eq!(accounts.len(), 2);
+        let matched = accounts
+            .iter()
+            .find(|account| account.steam_id64 == "76561198000000001")
+            .expect("matched account");
+        let link = target
+            .list_links(&matched.id)
+            .expect("matched links")
+            .remove(0);
+        assert_eq!(link.login_password.as_deref(), Some("plain-password"));
+        assert_eq!(link.remark.as_deref(), Some("导入备注"));
+        assert!(accounts
+            .iter()
+            .all(|account| account.steam_id64 != "76561198000000002"));
+        assert_eq!(
+            target.setting("theme").expect("preserved theme").as_deref(),
+            Some("\"mint\"")
         );
     }
 

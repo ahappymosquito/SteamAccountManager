@@ -1218,18 +1218,22 @@ fn export_backup_file(state: State<AppState>, path: String) -> AppResult<ImportP
 }
 
 #[tauri::command]
-fn preview_backup_file(_state: State<AppState>, path: String) -> AppResult<ImportPreview> {
+fn preview_backup_file(state: State<AppState>, path: String) -> AppResult<ImportPreview> {
     let document = read_backup_file(Path::new(&path))?;
-    Database::preview_backup(&document)
+    state.db.preview_backup_for_restore(&document)
 }
 
 #[tauri::command]
-fn restore_backup_file(state: State<AppState>, path: String) -> AppResult<ImportPreview> {
+fn restore_backup_file(
+    state: State<AppState>,
+    path: String,
+    selection: RestoreSelection,
+) -> AppResult<ImportPreview> {
     let imported = read_backup_file(Path::new(&path))?;
-    let preview = Database::preview_backup(&imported)?;
+    let preview = state.db.preview_backup_for_restore(&imported)?;
     let current = state.db.export_backup()?;
     write_pre_restore_snapshot(&state.data_dir, &current)?;
-    state.db.restore_backup(&imported)?;
+    state.db.restore_backup_selected(&imported, selection)?;
     Ok(preview)
 }
 

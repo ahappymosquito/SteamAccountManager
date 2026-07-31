@@ -144,9 +144,21 @@ export function PlatformAccountDialog({
             wasEditing ? "5E 玩家已验证并更新" : "5E 玩家已验证并关联",
           );
         } catch (error) {
+          await api.saveLink({
+            ...draft,
+            id,
+            platformCode: platform,
+            externalId: nickname,
+            displayName: nickname || undefined,
+            profileUrl: draft.profileUrl?.trim() || undefined,
+            loginAccount: draft.loginAccount?.trim() || undefined,
+            loginPassword: draft.loginPassword || undefined,
+            remark: draft.remark?.trim() || undefined,
+            status: "invalid",
+          });
           notify(
             "error",
-            `资料已保存，但玩家查询失败：${
+            `资料已保存，玩家查询失败：${
               (error as { message?: string }).message || "无法查询玩家"
             }`,
           );
@@ -162,6 +174,18 @@ export function PlatformAccountDialog({
           }
           notify("success", wasEditing ? "完美平台资料已更新" : "完美平台资料已保存");
         } catch (error) {
+          await api.saveLink({
+            ...draft,
+            id,
+            platformCode: platform,
+            externalId: account.steamId64,
+            displayName: nickname || undefined,
+            profileUrl: draft.profileUrl?.trim() || undefined,
+            loginAccount: draft.loginAccount?.trim() || undefined,
+            loginPassword: draft.loginPassword || undefined,
+            remark: draft.remark?.trim() || undefined,
+            status: "invalid",
+          });
           setHint(
             (error as { message?: string }).message ||
               "资料已保存，但完美平台查询暂时不可用",
@@ -170,14 +194,6 @@ export function PlatformAccountDialog({
         }
       }
       onChanged();
-      const links = await api.links(account.id);
-      setDraft(
-        editableLink(
-          account,
-          platform,
-          links.find((link) => link.platformCode === platform),
-        ),
-      );
     } catch (error) {
       notify(
         "error",
@@ -185,6 +201,7 @@ export function PlatformAccountDialog({
       );
     } finally {
       setSaving(false);
+      onOpenChange(false);
     }
   };
 

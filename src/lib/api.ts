@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Account, AccountCfgAssignment, CfgProfile, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchResult, TagOption, UpdateInfo, UpdateProgress } from "./types";
+import type { Account, AccountCfgAssignment, CfgProfile, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, RestoreSelection, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchResult, TagOption, UpdateInfo, UpdateProgress } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -49,7 +49,7 @@ export const api = {
   savePlatformApp: (app:PlatformApp) => invoke<void>("save_platform_app", { app }),
   exportBackupFile: (path:string) => invoke<ImportPreview>("export_backup_file", { path }),
   previewBackupFile: (path:string) => invoke<ImportPreview>("preview_backup_file", { path }),
-  restoreBackupFile: (path:string) => invoke<ImportPreview>("restore_backup_file", { path }),
+  restoreBackupFile: (path:string,selection:RestoreSelection) => invoke<ImportPreview>("restore_backup_file", { path,selection }),
   restoreSteamBackup: () => invoke<void>("restore_latest_steam_backup"),
   checkAppUpdate: () => invoke<UpdateInfo | null>("check_app_update"),
   installAppUpdate: (onProgress:(progress:UpdateProgress)=>void) => {

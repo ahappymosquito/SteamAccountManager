@@ -29,7 +29,9 @@ import {
 } from "../lib/appMeta";
 import type {
   AppError,
+  ImportPreview,
   PlatformCredentialStatus,
+  RestoreSelection,
   UpdateInfo,
   UpdateProgress,
 } from "../lib/types";
@@ -91,6 +93,15 @@ export function SettingsPage({
   const [perfectWorldStatus, setPerfectWorldStatus] = useState<PlatformCredentialStatus>();
   const [savingPerfectWorld, setSavingPerfectWorld] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [restoreCandidate, setRestoreCandidate] = useState<{
+    path: string;
+    preview: ImportPreview;
+  }>();
+  const [restoreSelection, setRestoreSelection] = useState<RestoreSelection>({
+    accounts: true,
+    cfg: true,
+    settings: true,
+  });
   const [credentialHelp, setCredentialHelp] =
     useState<keyof typeof credentialGuides>();
 
@@ -222,12 +233,25 @@ export function SettingsPage({
     setBackupBusy(true);
     try {
       const preview = await api.previewBackupFile(selected);
-      const confirmed = confirm(
-        `备份包含 ${preview.accountCount} 个账号、${preview.platformLinkCount} 条平台资料和 ${preview.cfgProfileCount} 个 CFG 方案。\n\n恢复将覆盖当前软件资料，继续吗？`,
-      );
-      if (!confirmed) return;
-      await api.restoreBackupFile(selected);
-      notify("success", "软件资料已恢复，请重启应用使全部数据生效");
+      setRestoreSelection({ accounts: true, cfg: true, settings: true });
+      setRestoreCandidate({ path: selected, preview });
+    } catch (error) {
+      notify("error", errorMessage(error));
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+  const confirmRestore = async () => {
+    if (!restoreCandidate) return;
+    if (!Object.values(restoreSelection).some(Boolean)) {
+      notify("error", "请至少选择一类要恢复的资料");
+      return;
+    }
+    setBackupBusy(true);
+    try {
+      await api.restoreBackupFile(restoreCandidate.path, restoreSelection);
+      setRestoreCandidate(undefined);
+      notify("success", "所选软件资料已恢复，请重启应用使全部数据生效");
       onConfigured();
     } catch (error) {
       notify("error", errorMessage(error));
@@ -637,6 +661,100 @@ export function SettingsPage({
           </button>
         </div>
       </details>
+      <Dialog.Root
+        open={Boolean(restoreCandidate)}
+        onOpenChange={(open) => !open && !backupBusy && setRestoreCandidate(undefined)}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="overlay" />
+          <Dialog.Content className="dialog restore-selection-dialog">
+            <header>
+              <div>
+                <Dialog.Title>选择要恢复的资料</Dialog.Title>
+                <Dialog.Description>
+                  账号资料只会恢复到本机已匹配的 Steam 账号。
+                </Dialog.Description>
+              </div>
+              <Dialog.Close className="icon-button" aria-label="关闭恢复选择">
+                <X />
+              </Dialog.Close>
+            </header>
+            {restoreCandidate && (
+              <div className="restore-selection-list">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={restoreSelection.accounts}
+                    onChange={(event) =>
+                      setRestoreSelection({
+                        ...restoreSelection,
+                        accounts: event.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    <strong>账号与平台资料</strong>
+                    <small>
+                      匹配 {restoreCandidate.preview.matchedAccountCount} 个本机账号，
+                      {restoreCandidate.preview.matchedPlatformLinkCount} 条平台资料
+                      {restoreCandidate.preview.skippedAccountCount > 0
+                        ? `，忽略 ${restoreCandidate.preview.skippedAccountCount} 个未匹配账号`
+                        : ""}
+                    </small>
+                  </span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={restoreSelection.cfg}
+                    onChange={(event) =>
+                      setRestoreSelection({
+                        ...restoreSelection,
+                        cfg: event.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    <strong>CFG 方案与账号分配</strong>
+                    <small>{restoreCandidate.preview.cfgProfileCount} 个 CFG 方案</small>
+                  </span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={restoreSelection.settings}
+                    onChange={(event) =>
+                      setRestoreSelection({
+                        ...restoreSelection,
+                        settings: event.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    <strong>软件设置与平台程序</strong>
+                    <small>{restoreCandidate.preview.settingCount} 条设置</small>
+                  </span>
+                </label>
+              </div>
+            )}
+            <footer>
+              <Dialog.Close className="button secondary" disabled={backupBusy}>
+                取消
+              </Dialog.Close>
+              <button
+                className="button primary"
+                disabled={
+                  backupBusy || !Object.values(restoreSelection).some(Boolean)
+                }
+                onClick={() => void confirmRestore()}
+              >
+                <Upload />
+                {backupBusy ? "正在恢复" : "恢复所选资料"}
+              </button>
+            </footer>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </section>
   );
 }

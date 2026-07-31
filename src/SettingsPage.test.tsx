@@ -66,6 +66,10 @@ describe("SettingsPage", () => {
       accountCount: 2,
       platformLinkCount: 3,
       cfgProfileCount: 1,
+      matchedAccountCount: 2,
+      skippedAccountCount: 0,
+      matchedPlatformLinkCount: 3,
+      settingCount: 4,
     });
     mocks.previewBackupFile.mockResolvedValue({
       schemaVersion: 2,
@@ -73,6 +77,10 @@ describe("SettingsPage", () => {
       accountCount: 2,
       platformLinkCount: 3,
       cfgProfileCount: 1,
+      matchedAccountCount: 1,
+      skippedAccountCount: 1,
+      matchedPlatformLinkCount: 2,
+      settingCount: 4,
     });
     mocks.restoreBackupFile.mockResolvedValue(undefined);
     mocks.restoreSteamBackup.mockResolvedValue(undefined);
@@ -223,10 +231,9 @@ describe("SettingsPage", () => {
     );
   });
 
-  it("previews and restores a selected backup after confirmation", async () => {
+  it("previews matching accounts and restores only selected backup categories", async () => {
     const notify = vi.fn();
     const configured = vi.fn();
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     mocks.openDialog.mockResolvedValue("D:\\backup.sam-backup.json");
     render(
       <SettingsPage notify={notify} onConfigured={configured} />,
@@ -241,20 +248,24 @@ describe("SettingsPage", () => {
         "D:\\backup.sam-backup.json",
       ),
     );
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringContaining("2 个账号、3 条平台资料和 1 个 CFG 方案"),
-    );
+    expect(
+      await screen.findByRole("dialog", { name: "选择要恢复的资料" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/匹配 1 个本机账号/)).toBeInTheDocument();
+    expect(screen.getByText(/忽略 1 个未匹配账号/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(/CFG 方案与账号分配/));
+    fireEvent.click(screen.getByRole("button", { name: "恢复所选资料" }));
     await waitFor(() =>
       expect(mocks.restoreBackupFile).toHaveBeenCalledWith(
         "D:\\backup.sam-backup.json",
+        { accounts: true, cfg: false, settings: true },
       ),
     );
     expect(configured).toHaveBeenCalled();
     expect(notify).toHaveBeenCalledWith(
       "success",
-      "软件资料已恢复，请重启应用使全部数据生效",
+      "所选软件资料已恢复，请重启应用使全部数据生效",
     );
-    confirmSpy.mockRestore();
   });
 
   it("does nothing when backup file selection is cancelled", async () => {

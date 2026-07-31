@@ -64,6 +64,21 @@ describe("account presentation", () => {
     expect(onSelect).toHaveBeenCalledWith("5e");
   });
 
+  it("marks a saved platform with a failed query in red", () => {
+    render(
+      <AccountPlatformBadges
+        account={{
+          ...account,
+          platformSummaries: [
+            { platformCode: "5e", displayName: "可能输错", status: "invalid" },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "编辑5E账号资料" }))
+      .toHaveClass("invalid");
+  });
+
   it("shows placement progress only in the 5E filtered context", () => {
     render(
       <AccountPlatformBadges
