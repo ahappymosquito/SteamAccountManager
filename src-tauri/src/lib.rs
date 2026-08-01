@@ -163,9 +163,11 @@ fn list_accounts(state: State<AppState>) -> AppResult<Vec<Account>> {
     for account in &mut accounts {
         if let Some(path) = steam::avatar_path(&avatar_root, &account.steam_id64) {
             account.avatar_path = Some(path.to_string_lossy().into_owned());
+            account.avatar_version = steam::profile_media::media_version(&path);
         }
         if let Some(path) = steam::profile_media::frame_path(&avatar_root, &account.steam_id64) {
             account.avatar_frame_path = Some(path.to_string_lossy().into_owned());
+            account.avatar_frame_version = steam::profile_media::media_version(&path);
         }
     }
     Ok(accounts)
@@ -715,8 +717,7 @@ fn get_settings(state: State<AppState>) -> AppResult<BTreeMap<String, Value>> {
     }
     Ok(map)
 }
-#[tauri::command]
-fn set_setting(state: State<AppState>, key: String, value: Value) -> AppResult<()> {
+fn validate_setting(key: &str, value: &Value) -> AppResult<()> {
     let allowed = [
         "scan_on_startup",
         "shutdown_timeout",
@@ -725,9 +726,10 @@ fn set_setting(state: State<AppState>, key: String, value: Value) -> AppResult<(
         "theme",
         "steam_path",
         "platform_order",
+        "account_order",
         "cfg_command_definitions",
     ];
-    if !allowed.contains(&key.as_str()) {
+    if !allowed.contains(&key) {
         return Err(AppError::new("SETTING_NOT_ALLOWED", "不允许修改该设置"));
     }
     if key == "theme"
@@ -745,6 +747,22 @@ fn set_setting(state: State<AppState>, key: String, value: Value) -> AppResult<(
             "CFG 参数定义必须是且不超过 2 MB 的数组",
         ));
     }
+    if key == "account_order"
+        && !value
+            .as_array()
+            .is_some_and(|items| items.iter().all(Value::is_string))
+    {
+        return Err(AppError::new(
+            "SETTING_INVALID",
+            "账号顺序必须是 Steam ID 数组",
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_setting(state: State<AppState>, key: String, value: Value) -> AppResult<()> {
+    validate_setting(&key, &value)?;
     state.db.set_setting(
         &key,
         &serde_json::to_string(&value)
@@ -1482,6 +1500,20 @@ mod tests {
     fn masks_names() {
         assert_eq!(mask_name("abcdefgh"), "ab***gh");
         assert_eq!(mask_name("abc"), "***");
+    }
+
+    #[test]
+    fn account_order_is_an_allowed_string_array_setting() {
+        let valid = serde_json::json!(["76561198000000001", "76561198000000002"]);
+        assert!(validate_setting("account_order", &valid).is_ok());
+
+        let invalid = serde_json::json!(["76561198000000001", 2]);
+        assert_eq!(
+            validate_setting("account_order", &invalid)
+                .expect_err("mixed account order")
+                .code,
+            "SETTING_INVALID"
+        );
     }
 
     #[test]

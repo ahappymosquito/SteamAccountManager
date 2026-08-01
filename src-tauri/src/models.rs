@@ -33,7 +33,9 @@ pub struct Account {
     pub platform_summaries: Vec<PlatformSummary>,
     pub player_ranks: Vec<PlayerRankSummary>,
     pub avatar_path: Option<String>,
+    pub avatar_version: Option<String>,
     pub avatar_frame_path: Option<String>,
+    pub avatar_frame_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

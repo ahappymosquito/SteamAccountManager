@@ -77,6 +77,7 @@ describe("AccountsPage ranking controls", () => {
     accounts: [],
     tagOptions: [],
     loading: false,
+    scanning: false,
     ui,
     onScan: vi.fn(),
     onAdd: vi.fn(),
@@ -113,6 +114,20 @@ describe("AccountsPage ranking controls", () => {
     expect(container.querySelector(".avatar-frame")).toHaveAttribute(
       "src",
       `asset://${framed.avatarFramePath}`,
+    );
+  });
+
+  it("cache-busts a replaced avatar frame without changing its file path", () => {
+    const framed = {
+      ...account,
+      avatarFramePath: "C:\\app\\avatars\\76561198000000001.frame.png",
+      avatarFrameVersion: "123-456",
+    };
+    const { container } = render(<AccountAvatar account={framed} />);
+
+    expect(container.querySelector(".avatar-frame")).toHaveAttribute(
+      "src",
+      `asset://${framed.avatarFramePath}?v=123-456`,
     );
   });
 

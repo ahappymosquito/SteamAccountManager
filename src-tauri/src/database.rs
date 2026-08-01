@@ -630,7 +630,9 @@ impl Database {
                 platform_summaries: Vec::new(),
                 player_ranks: Vec::new(),
                 avatar_path: None,
+                avatar_version: None,
                 avatar_frame_path: None,
+                avatar_frame_version: None,
             })
         })?;
         let mut accounts: Vec<Account> = rows.collect::<Result<_, _>>()?;

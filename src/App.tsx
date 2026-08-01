@@ -62,6 +62,9 @@ export { SettingsPage } from "./pages/SettingsPage";
 
 export const ACCOUNT_REFRESH_INTERVAL_MS = 10_000;
 
+type AccountScanKind = "startup" | "manual" | "silent";
+type AccountScanTask = { promise: Promise<void>; visible: boolean };
+
 const errorMessage = (error: unknown) =>
   (error as AppError)?.message || "操作失败，请稍后重试";
 const formatTime = (value?: string) =>
@@ -77,6 +80,7 @@ export default function App() {
   const [tagOptions, setTagOptions] = useState<TagOption[]>([]);
   const [status, setStatus] = useState<CurrentStatus>();
   const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
   const [details, setDetails] = useState<Account>();
   const [platformEditor, setPlatformEditor] = useState<{
     account: Account;
@@ -90,7 +94,7 @@ export default function App() {
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress>();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateDismissed, setUpdateDismissed] = useState(false);
-  const silentScanRunning = useRef(false);
+  const scanTask = useRef<AccountScanTask | undefined>(undefined);
 
   const notify = (kind: NoticeKind, text: string) => {
     ui.notify({ kind, text });
@@ -117,6 +121,54 @@ export default function App() {
     }
   };
 
+  const startAccountScan = (kind: AccountScanKind) => {
+    const activeTask = scanTask.current;
+    if (activeTask) {
+      if (kind === "manual" && !activeTask.visible) {
+        activeTask.visible = true;
+        setScanning(true);
+      }
+      return { started: false, promise: activeTask.promise };
+    }
+
+    const task: AccountScanTask = {
+      visible: kind !== "silent",
+      promise: Promise.resolve(),
+    };
+    if (task.visible) setScanning(true);
+    task.promise = (async () => {
+      try {
+        let accountCount = 0;
+        if (kind === "startup") {
+          const result = await api.initializeSteam();
+          accountCount = result.accountCount;
+          if (!result.steamPath) {
+            notify("error", "未自动检测到 Steam，请在设置中选择安装目录");
+            return;
+          }
+        } else {
+          accountCount = await api.scan();
+        }
+
+        await load(false, kind !== "silent");
+        if (kind !== "silent") {
+          await api.refreshSteamProfileMedia(kind === "manual");
+          await load(false, kind === "manual");
+        }
+        if (kind === "manual") {
+          notify("success", `已同步 ${accountCount} 个本机 Steam 账号`);
+        }
+      } catch (error) {
+        if (kind !== "silent") notify("error", errorMessage(error));
+      } finally {
+        if (scanTask.current === task) scanTask.current = undefined;
+        if (task.visible) setScanning(false);
+      }
+    })();
+    scanTask.current = task;
+    return { started: true, promise: task.promise };
+  };
+
   useEffect(() => {
     let active = true;
     const restoreTheme = async () => {
@@ -130,24 +182,10 @@ export default function App() {
         notify("error", errorMessage(error));
       }
     };
-    const initializeSteam = async () => {
-      try {
-        const result = await api.initializeSteam();
-        if (!result.steamPath) {
-          notify("error", "未自动检测到 Steam，请在设置中选择安装目录");
-        }
-      } catch (error) {
-        notify("error", errorMessage(error));
-      } finally {
-        await load();
-        void api
-          .refreshSteamProfileMedia(false)
-          .then(() => load(false, false))
-          .catch(() => {});
-      }
-    };
     void restoreTheme();
-    void initializeSteam();
+    void load(true, false).finally(() => {
+      if (active) startAccountScan("startup");
+    });
     return () => {
       active = false;
     };
@@ -155,17 +193,8 @@ export default function App() {
 
   useEffect(() => {
     if (ui.page !== "accounts") return;
-    const timer = window.setInterval(async () => {
-      if (silentScanRunning.current) return;
-      silentScanRunning.current = true;
-      try {
-        await api.scan();
-        await load(false, false);
-      } catch {
-        // Background refresh stays silent; manual refresh still reports errors.
-      } finally {
-        silentScanRunning.current = false;
-      }
+    const timer = window.setInterval(() => {
+      void startAccountScan("silent").promise;
     }, ACCOUNT_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [ui.page]);
@@ -250,15 +279,8 @@ export default function App() {
       notify("error", "主题已预览，但未能保存到应用设置");
     });
   };
-  const scan = async () => {
-    try {
-      const count = await api.scan();
-      await api.refreshSteamProfileMedia(true);
-      await load();
-      notify("success", `已同步 ${count} 个本机 Steam 账号`);
-    } catch (error) {
-      notify("error", errorMessage(error));
-    }
+  const scan = () => {
+    void startAccountScan("manual").promise;
   };
   const saveProfile = async (input: ProfileInput) => {
     try {
@@ -400,6 +422,7 @@ export default function App() {
               accounts={filtered}
               tagOptions={tagOptions}
               loading={loading}
+              scanning={scanning}
               status={status}
               ui={ui}
               onScan={scan}
@@ -515,6 +538,7 @@ export function AccountsPage({
   accounts,
   tagOptions,
   loading,
+  scanning,
   status,
   ui,
   onScan,
@@ -528,6 +552,7 @@ export function AccountsPage({
   accounts: Account[];
   tagOptions: TagOption[];
   loading: boolean;
+  scanning: boolean;
   status?: CurrentStatus;
   ui: ReturnType<typeof useUi>;
   onScan: () => void;
@@ -618,9 +643,14 @@ export function AccountsPage({
           <Plus />
           添加 Steam 账号
         </button>
-        <button className="button primary" onClick={onScan}>
-          <RefreshCw />
-          重新扫描
+        <button
+          className="button primary"
+          onClick={onScan}
+          disabled={scanning}
+          aria-busy={scanning}
+        >
+          <RefreshCw className={scanning ? "spin-icon" : undefined} />
+          {scanning ? "正在扫描" : "重新扫描"}
         </button>
       </section>
       {loading ? (
@@ -628,6 +658,12 @@ export function AccountsPage({
           <i />
           <i />
           <i />
+        </div>
+      ) : accounts.length === 0 && scanning ? (
+        <div className="empty scan-empty" role="status" aria-live="polite">
+          <RefreshCw className="spinner-icon" />
+          <h2>正在扫描本机 Steam 账号</h2>
+          <p>发现账号后会立即显示，头像和头像框将在后台继续同步。</p>
         </div>
       ) : accounts.length === 0 ? (
         <div className="empty">
