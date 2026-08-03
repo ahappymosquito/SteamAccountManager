@@ -28,7 +28,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{Emitter, Manager, State};
+use tauri::{ipc::Channel, Emitter, Manager, State};
 use uuid::Uuid;
 
 const PLAYER_CACHE_TTL_MINUTES: i64 = 15;
@@ -533,6 +533,7 @@ fn current_status(state: State<AppState>) -> CurrentStatus {
 }
 
 trait SwitchWorkflowExecutor {
+    fn progress(&self, stage: &str, message: &str);
     fn shutdown_steam(&mut self) -> AppResult<()>;
     fn prepare_cs2_config(&mut self) -> AppResult<()>;
     fn switch_steam_account(&mut self) -> AppResult<()>;
@@ -545,14 +546,18 @@ fn execute_switch_workflow(
     cs2_installed: bool,
     restart_five_e: bool,
 ) -> AppResult<Vec<String>> {
+    executor.progress("closing_steam", "正在关闭 Steam");
     executor.shutdown_steam()?;
     if cs2_installed {
+        executor.progress("preparing_cfg", "正在准备目标账号的 CS2 配置");
         executor.prepare_cs2_config()?;
     }
+    executor.progress("switching_steam", "正在切换 Steam 账号");
     executor.switch_steam_account()?;
     executor.record_switch()?;
     let mut warnings = Vec::new();
     if restart_five_e {
+        executor.progress("waiting_steam_login", "正在确认目标 Steam 账号已登录");
         if let Err(error) = executor.restart_five_e() {
             warnings.push(format!(
                 "Steam 账号已切换，但 5E 未能启动或重启：{}",
@@ -560,6 +565,7 @@ fn execute_switch_workflow(
             ));
         }
     }
+    executor.progress("completed", "Steam 账号切换完成");
     Ok(warnings)
 }
 
@@ -570,9 +576,17 @@ struct LocalSwitchWorkflowExecutor<'a> {
     steam_id64: &'a str,
     shutdown_timeout: u64,
     startup_timeout: u64,
+    on_event: &'a Channel<SwitchProgress>,
 }
 
 impl SwitchWorkflowExecutor for LocalSwitchWorkflowExecutor<'_> {
+    fn progress(&self, stage: &str, message: &str) {
+        let _ = self.on_event.send(SwitchProgress {
+            stage: stage.into(),
+            message: message.into(),
+        });
+    }
+
     fn shutdown_steam(&mut self) -> AppResult<()> {
         steam::shutdown(self.steam_dir, self.shutdown_timeout)
     }
@@ -594,6 +608,7 @@ impl SwitchWorkflowExecutor for LocalSwitchWorkflowExecutor<'_> {
             self.steam_id64,
             self.shutdown_timeout,
             self.startup_timeout,
+            || self.progress("waiting_steam_login", "正在等待目标 Steam 账号登录"),
         )
     }
 
@@ -603,12 +618,29 @@ impl SwitchWorkflowExecutor for LocalSwitchWorkflowExecutor<'_> {
 
     fn restart_five_e(&mut self) -> AppResult<()> {
         let app = resolve_software_app(self.state, "5e")?;
+        let readiness = steam::wait_for_five_e_readiness(self.steam_id64, || {
+            self.progress(
+                "waiting_steam_services",
+                "Steam 账号已登录，正在等待服务就绪",
+            );
+        })?;
+        if readiness == steam::FiveELoginReadiness::DifferentUser {
+            return Err(AppError::new(
+                "STEAM_ACTIVE_USER_MISMATCH",
+                "Steam 当前登录的不是目标账号，已取消启动 5E",
+            ));
+        }
+        self.progress("starting_five_e", "Steam 已就绪，正在启动或重启 5E");
         steam::restart_five_e(&app, Duration::from_secs(10))
     }
 }
 
 #[tauri::command]
-fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<SwitchResult> {
+fn switch_account(
+    state: State<AppState>,
+    steam_id64: String,
+    on_event: Channel<SwitchProgress>,
+) -> AppResult<SwitchResult> {
     validate_steam_id(&steam_id64)?;
     if state
         .switch_lock
@@ -652,6 +684,7 @@ fn switch_account(state: State<AppState>, steam_id64: String) -> AppResult<Switc
             steam_id64: &steam_id64,
             shutdown_timeout,
             startup_timeout,
+            on_event: &on_event,
         };
         let restart_five_e = account.platform_codes.iter().any(|code| code == "5e");
         let warnings = execute_switch_workflow(&mut executor, cs2_installed, restart_five_e)?;
@@ -1648,6 +1681,8 @@ mod tests {
     }
 
     impl SwitchWorkflowExecutor for RecordingSwitchWorkflowExecutor {
+        fn progress(&self, _stage: &str, _message: &str) {}
+
         fn shutdown_steam(&mut self) -> AppResult<()> {
             self.operations.push(SwitchOperation::ShutdownSteam);
             Ok(())

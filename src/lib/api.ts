@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Account, AccountCfgAssignment, CfgProfile, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, RestoreSelection, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchResult, TagOption, UpdateInfo, UpdateProgress } from "./types";
+import type { Account, AccountCfgAssignment, CfgProfile, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, RestoreSelection, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchProgress, SwitchResult, TagOption, UpdateInfo, UpdateProgress } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -15,7 +15,11 @@ export const api = {
   beginSteamLogin: () => invoke<SteamLoginSession>("begin_steam_login"),
   steamLoginStatus: (sessionId:string) => invoke<SteamLoginStatus>("get_steam_login_status", { sessionId }),
   cancelSteamLogin: (sessionId:string) => invoke<void>("cancel_steam_login", { sessionId }),
-  switchAccount: (steamId64:string) => invoke<SwitchResult>("switch_account", { steamId64 }),
+  switchAccount: (steamId64:string,onProgress:(progress:SwitchProgress)=>void) => {
+    const onEvent = new Channel<SwitchProgress>();
+    onEvent.onmessage = onProgress;
+    return invoke<SwitchResult>("switch_account", { steamId64,onEvent });
+  },
   links: (steamAccountId:string) => invoke<PlatformLink[]>("list_platform_links", { steamAccountId }),
   saveLink: (input:Omit<PlatformLink,"lastVerifiedAt">) => invoke<void>("save_platform_link", { input }),
   deleteLink: (id:string) => invoke<void>("delete_platform_link", { id }),

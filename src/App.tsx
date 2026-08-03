@@ -48,6 +48,7 @@ import type {
   ProfileInput,
   SteamLoginSession,
   SwitchLog,
+  SwitchProgress,
   TagOption,
   Theme,
   UpdateInfo,
@@ -292,11 +293,11 @@ export default function App() {
       throw error;
     }
   };
-  const performSwitch = async () => {
+  const performSwitch = async (onProgress: (progress: SwitchProgress) => void) => {
     if (!switching) return;
     try {
       await flushCfgDraft();
-      const result = await api.switchAccount(switching.steamId64);
+      const result = await api.switchAccount(switching.steamId64, onProgress);
       await load();
       const notice = switchResultNotice(result);
       notify(notice.kind, notice.text);

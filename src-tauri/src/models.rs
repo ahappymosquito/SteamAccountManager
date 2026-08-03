@@ -249,6 +249,13 @@ pub struct SwitchResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SwitchProgress {
+    pub stage: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportPreview {
     pub schema_version: u64,
     pub exported_at: String,

@@ -1,5 +1,11 @@
 # Steam Account Manager
 
+## 0.11.6 Steam 登录就绪后启动 5E
+
+- 切换已关联 5E 的账号时，读取 Steam 本机 `ActiveUser` 并与目标 SteamID64 精确匹配，连续稳定后才启动或重启 5E。
+- Steam 未提供有效活动用户信号时最多等待 10 秒后兼容启动；若明确检测到其他账号，则保留 Steam 切换结果并阻止 5E 启动。
+- 切换弹窗实时显示关闭 Steam、准备 CFG、等待登录、等待服务和启动 5E 等阶段，等待期间禁止重复操作。
+
 ## 0.11.5 扫描体验与头像框刷新
 
 - 修复账号首页拖拽顺序因设置白名单遗漏而无法保存的问题。
@@ -370,7 +376,7 @@ git push origin v0.1.3
 
 ## 账号切换原理
 
-切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出；本机已安装 CS2 时，先复制所选 CFG 到 `game\csgo\cfg` 并校验 SHA-256，再只替换本应用此前管理的 `+exec` 参数，保留其他启动参数。通过后才创建安全备份，将目标账号设置为 `MostRecent=1` 和 `AllowAutoLogin=1`，写入注册表 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam；未安装 CS2 时跳过全部 CS2 配置步骤。应用不会自动启动 CS2。若目标账号关联 5E，则在 Steam 切换完成后启动 5E；已经运行时，只结束配置安装目录内且名称属于 5E 白名单的进程，再重新启动。5E 未配置、退出超时或启动失败会作为警告记录，不回滚已成功的 Steam 切换；必要的 Steam 检查失败仍会中止并记录具体原因。
+切换目标始终由 SteamID64 定位，再读取对应 `AccountName`。流程会重新校验 VDF、请求 `steam.exe -shutdown` 正常退出；本机已安装 CS2 时，先复制所选 CFG 到 `game\csgo\cfg` 并校验 SHA-256，再只替换本应用此前管理的 `+exec` 参数，保留其他启动参数。通过后才创建安全备份，将目标账号设置为 `MostRecent=1` 和 `AllowAutoLogin=1`，写入注册表 `AutoLoginUser` 与 `RememberPassword`，最后重新启动 Steam；未安装 CS2 时跳过全部 CS2 配置步骤。应用不会自动启动 CS2。若目标账号关联 5E，则在 Steam 切换完成后读取注册表 `ActiveProcess\ActiveUser`，精确匹配目标账号并等待服务稳定后再启动 5E；信号不可用时最多等待 10 秒后兼容启动，明确检测到其他账号时则阻止 5E。已经运行时，只结束配置安装目录内且名称属于 5E 白名单的进程，再重新启动。5E 未配置、退出超时或启动失败会作为警告记录，不回滚已成功的 Steam 切换；必要的 Steam 检查失败仍会中止并记录具体原因。
 
 应用会在写入后以及 Steam 稳定启动后重新检查 VDF 和注册表。只有目标账号仍为唯一的最近账号、已记住密码并允许自动登录时才记录切换成功；如果 Steam 回写或清除了这些状态，应用会提示在官方客户端重新登录并勾选“记住我”。
 

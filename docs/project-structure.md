@@ -156,12 +156,12 @@ SwitchDialog 确认
       2. 若安装 CS2，部署目标账号 CFG
       3. 切换 Steam 本地账号并重启 Steam
       4. 写入切换记录
-      5. 若账号关联 5E，启动或安全重启 5E
+      5. 若账号关联 5E，等待 ActiveUser 匹配并安全启动或重启 5E
   → Database 写入 switch_logs
   → SwitchResult 返回前端
 ```
 
-Steam 切换成功后，5E 启动失败只产生警告，不回滚已完成的 Steam 切换。
+Steam 切换成功后，前端通过 Tauri Channel 显示各切换阶段。5E 启动前最多等待 10 秒确认本机 `ActiveUser`；信号缺失时兼容启动，明确为其他账号时阻止启动。5E 启动失败只产生警告，不回滚已完成的 Steam 切换。
 
 ### CFG 编辑与切换部署
 

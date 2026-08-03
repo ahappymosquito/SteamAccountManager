@@ -2,7 +2,7 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
-import type { Account, CurrentStatus } from "../lib/types";
+import type { Account, CurrentStatus, SwitchProgress } from "../lib/types";
 import { currentStatusName } from "./CurrentSteamStatus";
 
 type SwitchDialogProps = {
@@ -10,7 +10,7 @@ type SwitchDialogProps = {
   status?: CurrentStatus;
   open: boolean;
   onOpenChange: (value: boolean) => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: (onProgress: (progress: SwitchProgress) => void) => Promise<void>;
 };
 
 export function SwitchDialog({
@@ -21,21 +21,31 @@ export function SwitchDialog({
   onConfirm,
 }: SwitchDialogProps) {
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<SwitchProgress>();
   const confirm = async () => {
     setBusy(true);
+    setProgress({ stage: "closing_steam", message: "正在关闭 Steam" });
     try {
-      await onConfirm();
+      await onConfirm(setProgress);
       onOpenChange(false);
     } finally {
       setBusy(false);
+      setProgress(undefined);
     }
   };
 
+  const handleOpenChange = (value: boolean) => {
+    if (!busy) onOpenChange(value);
+  };
+
   return (
-    <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
+    <AlertDialog.Root open={open} onOpenChange={handleOpenChange}>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="overlay" />
-        <AlertDialog.Content className="dialog compact">
+        <AlertDialog.Content
+          className="dialog compact"
+          onEscapeKeyDown={(event) => busy && event.preventDefault()}
+        >
           <AlertDialog.Title>
             <AlertTriangle className="warning-icon" />
             确认切换 Steam 账号
@@ -44,7 +54,7 @@ export function SwitchDialog({
             将关闭并按目标账号重新启动 Steam。已安装 CS2
             时会先同步所选 CFG，但不会自动启动 CS2。
             {account.platformCodes.includes("5e")
-              ? "此账号已关联 5E，Steam 切换完成后会启动或重启 5E。"
+              ? "此账号已关联 5E，确认目标 Steam 账号登录后会启动或重启 5E。"
               : "此账号未关联 5E，不会启动第三方平台。"}
             工具只能切换本机仍然有效、已被 Steam
             记住的登录状态；状态失效时仍需在 Steam 官方客户端完成登录或 Steam Guard 验证。
@@ -66,10 +76,9 @@ export function SwitchDialog({
             </div>
           </dl>
           {busy && (
-            <div className="progress">
+            <div className="progress" role="status" aria-live="polite">
               <span className="spinner" />
-              正在关闭 Steam、准备配置并切换账号
-              {account.platformCodes.includes("5e") ? "，随后处理 5E…" : "…"}
+              {progress?.message || "正在切换 Steam 账号"}
             </div>
           )}
           <footer>

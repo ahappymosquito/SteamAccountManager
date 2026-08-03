@@ -34,6 +34,11 @@ const PERFECTWORLD_FOLDERS: &[&str] =
     &["perfectworldarena", "PerfectWorldArena", "完美世界竞技平台"];
 const FIVE_E_FOLDERS: &[&str] = &["5EClient", "5E", "5EPlay", "5eplay", "5E对战平台"];
 const REGISTRY_INSTALL_SCAN_DEPTH: usize = 3;
+const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
+const FIVE_E_LOGIN_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const FIVE_E_LOGIN_POLL_COUNT: usize = 21;
+const FIVE_E_LOGIN_STABLE_SAMPLES: usize = 5;
+const FIVE_E_SERVICE_GRACE: Duration = Duration::from_secs(2);
 
 fn platform_specs() -> [(
     &'static str,
@@ -89,7 +94,6 @@ pub fn discover_platform_apps() -> AppResult<Vec<PlatformApp>> {
 }
 
 pub fn discover_cs2_configs(steam_dir: &Path) -> AppResult<Vec<Cs2Config>> {
-    const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
     let userdata = steam_dir.join("userdata");
     if !userdata.is_dir() {
         return Ok(Vec::new());
@@ -686,6 +690,88 @@ fn registry_login_state() -> Option<(String, u32)> {
 fn registry_auto_login() -> Option<String> {
     registry_login_state().map(|(account_name, _)| account_name)
 }
+
+fn steam_account_id32(steam_id64: &str) -> AppResult<u32> {
+    let steam_id64 = steam_id64
+        .parse::<u64>()
+        .map_err(|_| AppError::new("STEAM_ID_INVALID", "SteamID64 格式无效"))?;
+    let account_id = steam_id64
+        .checked_sub(STEAM_ID64_BASE)
+        .filter(|value| *value <= u32::MAX as u64)
+        .ok_or_else(|| AppError::new("STEAM_ID_INVALID", "SteamID64 超出有效范围"))?;
+    Ok(account_id as u32)
+}
+
+#[cfg(windows)]
+fn registry_active_user() -> Option<u32> {
+    use winreg::{enums::*, RegKey};
+    let key = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Valve\\Steam\\ActiveProcess")
+        .ok()?;
+    key.get_value::<u32, _>("ActiveUser")
+        .ok()
+        .filter(|value| *value != 0)
+}
+
+#[cfg(not(windows))]
+fn registry_active_user() -> Option<u32> {
+    None
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum FiveELoginReadiness {
+    TargetReady,
+    SignalUnavailable,
+    DifferentUser,
+}
+
+fn wait_for_five_e_readiness_with(
+    target_account_id: u32,
+    poll_count: usize,
+    stable_samples: usize,
+    mut read_active_user: impl FnMut() -> Option<u32>,
+    mut pause: impl FnMut(Duration),
+    mut on_target_ready: impl FnMut(),
+) -> FiveELoginReadiness {
+    let mut consecutive_target_samples = 0;
+    let mut last_sample = None;
+    for index in 0..poll_count {
+        let sample = read_active_user();
+        last_sample = sample;
+        if sample == Some(target_account_id) {
+            consecutive_target_samples += 1;
+            if consecutive_target_samples >= stable_samples {
+                on_target_ready();
+                pause(FIVE_E_SERVICE_GRACE);
+                return FiveELoginReadiness::TargetReady;
+            }
+        } else {
+            consecutive_target_samples = 0;
+        }
+        if index + 1 < poll_count {
+            pause(FIVE_E_LOGIN_POLL_INTERVAL);
+        }
+    }
+    match last_sample {
+        Some(account_id) if account_id != target_account_id => FiveELoginReadiness::DifferentUser,
+        _ => FiveELoginReadiness::SignalUnavailable,
+    }
+}
+
+pub fn wait_for_five_e_readiness(
+    target_steam_id64: &str,
+    on_target_ready: impl FnMut(),
+) -> AppResult<FiveELoginReadiness> {
+    let target_account_id = steam_account_id32(target_steam_id64)?;
+    Ok(wait_for_five_e_readiness_with(
+        target_account_id,
+        FIVE_E_LOGIN_POLL_COUNT,
+        FIVE_E_LOGIN_STABLE_SAMPLES,
+        registry_active_user,
+        thread::sleep,
+        on_target_ready,
+    ))
+}
 pub fn status(dir: Option<&Path>) -> CurrentStatus {
     let running = is_running();
     let account_name = registry_auto_login();
@@ -1025,6 +1111,7 @@ pub fn switch(
     target: &str,
     shutdown_timeout: u64,
     startup_timeout: u64,
+    on_steam_started: impl FnOnce(),
 ) -> AppResult<()> {
     validate_dir(dir)?;
     let path = dir.join("config/loginusers.vdf");
@@ -1050,6 +1137,7 @@ pub fn switch(
     Command::new(dir.join("steam.exe"))
         .spawn()
         .map_err(|_| AppError::new("STEAM_START_FAILED", "设置已完成，但无法启动 Steam"))?;
+    on_steam_started();
     wait_for_stable_auto_login(dir, target, &name, startup_timeout)?;
     Ok(())
 }
@@ -1225,6 +1313,73 @@ mod atomic_write_tests {
             &app,
         ));
         assert!(!is_five_e_process("5EClient.exe", None, &app));
+    }
+
+    #[test]
+    fn converts_steam_id64_to_active_user_account_id() {
+        assert_eq!(
+            steam_account_id32("76561198000000001").expect("account id"),
+            39_734_273
+        );
+        assert!(steam_account_id32("not-a-steam-id").is_err());
+        assert!(steam_account_id32("1").is_err());
+    }
+
+    #[test]
+    fn five_e_readiness_requires_a_stable_target_user() {
+        let target = 42;
+        let mut samples = [
+            Some(9),
+            Some(target),
+            Some(9),
+            Some(target),
+            Some(target),
+            Some(target),
+        ]
+        .into_iter();
+        let mut pauses = Vec::new();
+        let mut ready_notified = false;
+
+        let readiness = wait_for_five_e_readiness_with(
+            target,
+            6,
+            3,
+            || samples.next().flatten(),
+            |duration| pauses.push(duration),
+            || ready_notified = true,
+        );
+
+        assert_eq!(readiness, FiveELoginReadiness::TargetReady);
+        assert!(ready_notified);
+        assert_eq!(pauses.last(), Some(&FIVE_E_SERVICE_GRACE));
+    }
+
+    #[test]
+    fn five_e_readiness_falls_back_when_active_user_is_unavailable() {
+        let readiness = wait_for_five_e_readiness_with(
+            42,
+            3,
+            2,
+            || None,
+            |_| {},
+            || panic!("missing signal must not report target ready"),
+        );
+
+        assert_eq!(readiness, FiveELoginReadiness::SignalUnavailable);
+    }
+
+    #[test]
+    fn five_e_readiness_blocks_a_persistent_different_user() {
+        let readiness = wait_for_five_e_readiness_with(
+            42,
+            3,
+            2,
+            || Some(9),
+            |_| {},
+            || panic!("different user must not report target ready"),
+        );
+
+        assert_eq!(readiness, FiveELoginReadiness::DifferentUser);
     }
 
     #[test]
