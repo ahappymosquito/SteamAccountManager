@@ -42,10 +42,17 @@ $historyDirectory = Join-Path $releaseDirectory "history"
 New-Item -ItemType Directory -Path $historyDirectory -Force | Out-Null
 
 # Keep release/ focused on the newest build while preserving every older artifact.
+# Leave documentation such as CHANGELOG.md in place; only archive installers and zips.
 $archiveStamp = Get-Date -Format "yyyyMMdd-HHmmss"
 foreach ($existing in @(
     Get-ChildItem -LiteralPath $releaseDirectory -Force |
-        Where-Object { $_.FullName -ne $historyDirectory }
+        Where-Object {
+            $_.FullName -ne $historyDirectory -and
+            (
+                $_.Extension -in @(".exe", ".zip") -or
+                ($_.PSIsContainer)
+            )
+        }
 )) {
     $archiveDestination = Join-Path $historyDirectory $existing.Name
     if (Test-Path -LiteralPath $archiveDestination) {
@@ -89,6 +96,10 @@ if ($IncludeReleaseArchive) {
             -Destination (Join-Path $portableDirectory "Steam Account Manager.exe")
         Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination $portableDirectory
         Copy-Item -LiteralPath (Join-Path $projectRoot "LICENSE") -Destination $portableDirectory
+        $changelog = Join-Path $releaseDirectory "CHANGELOG.md"
+        if (Test-Path -LiteralPath $changelog -PathType Leaf) {
+            Copy-Item -LiteralPath $changelog -Destination $portableDirectory
+        }
         Compress-Archive -LiteralPath $portableDirectory -DestinationPath $portableArchive -Force
         $artifacts += Get-Item -LiteralPath $portableArchive
     }
@@ -104,4 +115,20 @@ foreach ($artifact in $artifacts) {
         throw "Release artifact is empty: $($artifact.FullName)"
     }
     Write-Output ("{0}`t{1} bytes" -f $artifact.FullName, $artifact.Length)
+}
+
+foreach ($buildDirectory in @(
+    (Join-Path $projectRoot "src-tauri\target"),
+    (Join-Path $projectRoot "dist")
+)) {
+    if (-not (Test-Path -LiteralPath $buildDirectory)) {
+        continue
+    }
+    try {
+        Remove-Item -LiteralPath $buildDirectory -Recurse -Force
+        Write-Output "Removed build directory: $buildDirectory"
+    }
+    catch {
+        Write-Warning "Failed to remove build directory ${buildDirectory}: $_"
+    }
 }

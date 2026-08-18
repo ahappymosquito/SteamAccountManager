@@ -6,6 +6,8 @@
 - 日常测试交付必须同时生成 NSIS 安装版和可直接运行的 Windows x64 便携版 EXE，并复制到项目根目录的 `release/`。
 - 安装版命名为 `Steam Account Manager_<version>_x64-setup.exe`；本地测试便携版命名为 `Steam-Account-Manager-<version>-portable.exe`。
 - 交付前必须验证两个文件都存在、大小大于零，并报告绝对路径；缺少任一产物不得宣称任务完成。
+- `package:local` / `package:release` 在产物已复制到 `release/` 并校验通过后，必须删除 `src-tauri/target` 和项目根 `dist`，避免构建中间文件占盘。不删除 `release/`、`release/history/`、`release/CHANGELOG.md`、`node_modules` 或源码。删除失败只警告，不让已经成功的交付失败。
+- `release/CHANGELOG.md` 是版本更新日志，随仓库提交。打包时只把旧的 `.exe` / `.zip` 移入 `history/`，不得归档或删除该文件。
 - 仅修改说明文档或项目协作规则、且不改变源码、配置、构建脚本、依赖或版本时，可以不重新构建；用户当前提示词始终优先。
 
 ## GitHub 外部操作

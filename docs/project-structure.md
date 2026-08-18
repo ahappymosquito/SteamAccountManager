@@ -46,7 +46,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 | `public/` | 应用图标及 Steam、5E、完美、TeamSpeak 平台品牌静态资源 |
 | `scripts/` | 图标校验与 Windows 双产物归档脚本 |
 | `docs/` | 平台调研、配置资料和项目结构文档 |
-| `release/` | 本地交付的安装版与便携版；二进制不提交 Git |
+| `release/` | 本地交付的安装版、便携版与 [`CHANGELOG.md`](../release/CHANGELOG.md)；二进制不提交 Git，更新日志提交 |
 | `.codegraph/` | 每台机器独立生成的代码图数据库；仅提交忽略规则 |
 
 ## 前端结构
@@ -156,12 +156,12 @@ SwitchDialog 确认
       2. 若安装 CS2，部署目标账号 CFG
       3. 切换 Steam 本地账号并重启 Steam
       4. 写入切换记录
-      5. 若账号关联 5E，等待 ActiveUser 匹配并安全启动或重启 5E
+      5. 若未开启「只切 Steam」且账号关联 5E 或完美，等待 Steam 就绪后启动对应平台
   → Database 写入 switch_logs
   → SwitchResult 返回前端
 ```
 
-Steam 切换成功后，前端通过 Tauri Channel 显示各切换阶段。5E 启动前最多等待 10 秒确认本机 `ActiveUser`；信号缺失时兼容启动，明确为其他账号时阻止启动。5E 启动失败只产生警告，不回滚已完成的 Steam 切换。
+Steam 切换成功后，前端通过 Tauri Channel 显示各切换阶段。默认「只切 Steam」不启动第三方平台。关闭开关后，5E 启动前最多等待 10 秒确认本机 `ActiveUser`；信号缺失时兼容启动，明确为其他账号时阻止启动。完美平台在 Steam 就绪后启动或重启。平台启动失败只产生警告，不回滚已完成的 Steam 切换。
 
 ### CFG 编辑与切换部署
 
