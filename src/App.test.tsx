@@ -84,6 +84,8 @@ describe("AccountsPage ranking controls", () => {
     onDetails: vi.fn(),
     onPlatform: vi.fn(),
     onReorder: vi.fn(),
+    steamOnlySwitch: true,
+    onSteamOnlySwitch: vi.fn(),
     onSwitch: vi.fn(),
     onFavorite: vi.fn(),
   };

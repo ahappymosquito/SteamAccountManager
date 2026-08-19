@@ -29,6 +29,7 @@ describe("SwitchDialog", () => {
           personaName: "当前中文昵称",
           steamRunning: true,
         }}
+        steamOnlySwitch={false}
         open
         onOpenChange={vi.fn()}
         onConfirm={vi.fn()}
@@ -36,7 +37,7 @@ describe("SwitchDialog", () => {
     );
 
     expect(
-      screen.getByText(/确认目标 Steam 账号登录后会启动或重启 5E/),
+      screen.getByText(/此账号已关联 5E，确认目标 Steam 账号登录后会启动或重启这些平台/),
     ).toBeInTheDocument();
     expect(screen.getByText(/已安装 CS2 时会先同步所选 CFG/)).toBeInTheDocument();
     expect(screen.getByText("当前中文昵称")).toBeInTheDocument();
@@ -62,6 +63,7 @@ describe("SwitchDialog", () => {
     render(
       <SwitchDialog
         account={account}
+        steamOnlySwitch={false}
         open
         onOpenChange={onOpenChange}
         onConfirm={onConfirm}
@@ -99,5 +101,22 @@ describe("SwitchDialog", () => {
 
     act(() => finish?.());
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("does not promise a 5E launch when only Steam should switch", () => {
+    render(
+      <SwitchDialog
+        account={account}
+        steamOnlySwitch
+        open
+        onOpenChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(/当前为「只切 Steam」，不会启动 5E 或完美平台/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/会启动或重启这些平台/)).not.toBeInTheDocument();
   });
 });

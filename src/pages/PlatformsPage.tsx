@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { CDN_STEAM_SETUP_URL, CDN_TEAMSPEAK_CLIENT_URL } from "../lib/cdn";
 import { api } from "../lib/api";
 import { usePointerReorder } from "../lib/pointerReorder";
 import type {
@@ -37,8 +38,8 @@ const catalog: Record<PlatformCode, SoftwareStatus> = {
     code: "steam",
     name: "Steam",
     installed: false,
-    downloadMode: "browser_fallback",
-    officialUrl: "https://store.steampowered.com/about/",
+    downloadMode: "managed",
+    officialUrl: CDN_STEAM_SETUP_URL,
   },
   "5e": {
     code: "5e",
@@ -59,7 +60,7 @@ const catalog: Record<PlatformCode, SoftwareStatus> = {
     name: "TeamSpeak 3",
     installed: false,
     downloadMode: "managed",
-    officialUrl: "https://www.teamspeak.com/en/downloads/",
+    officialUrl: CDN_TEAMSPEAK_CLIENT_URL,
   },
 };
 
@@ -212,7 +213,7 @@ export function PlatformsPage({
   };
 
   const download = async (item: SoftwareStatus) => {
-    if (item.code === "5e" || item.code === "steam") {
+    if (item.code === "5e") {
       try {
         await api.openOfficialUrl(item.code);
       } catch (error) {

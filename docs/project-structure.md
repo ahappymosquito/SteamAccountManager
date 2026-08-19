@@ -62,7 +62,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 
 - `pages/Cs2Page.tsx`：CFG 方案、可视化命令编辑、源码编辑与导入导出。
 - `pages/PlatformsPage.tsx`：统一管理 Steam、5E、完美和 TeamSpeak 3 的发现、下载、路径配置、启动与可持久化拖拽顺序。
-- `pages/SettingsPage.tsx`：版本更新、切换超时、默认折叠的平台凭据、统一数据导入导出与备份恢复。
+- `pages/SettingsPage.tsx`：切换超时、默认折叠的平台凭据、统一数据导入导出与备份恢复。版本与更新入口在左侧栏底部。
 - 软件备份导出保持全量；恢复命令接收分类选择，并在数据库层按 SteamID64 将账号资料映射到本机当前可用账号。
 - 账号列表与切换日志目前仍由 `App.tsx` 内部的 `AccountsPage`、`LogsPage` 实现。
 
@@ -161,7 +161,7 @@ SwitchDialog 确认
   → SwitchResult 返回前端
 ```
 
-Steam 切换成功后，前端通过 Tauri Channel 显示各切换阶段。默认「只切 Steam」不启动第三方平台。关闭开关后，5E 启动前最多等待 10 秒确认本机 `ActiveUser`；信号缺失时兼容启动，明确为其他账号时阻止启动。完美平台在 Steam 就绪后启动或重启。平台启动失败只产生警告，不回滚已完成的 Steam 切换。
+启动扫描先同步账号再后台补齐头像。应用更新检查 `https://cdn.qrqto.club/app/latest.json`。Steam 切换成功后，前端通过 Tauri Channel 显示各切换阶段。默认「只切 Steam」不启动第三方平台。关闭开关后，5E 启动前最多等待 10 秒确认本机 `ActiveUser`；信号缺失时兼容启动，明确为其他账号时阻止启动。完美平台在 Steam 就绪后启动或重启。平台启动失败只产生警告，不回滚已完成的 Steam 切换。
 
 ### CFG 编辑与切换部署
 

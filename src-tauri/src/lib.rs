@@ -1,5 +1,6 @@
 //! Tauri application composition and validated IPC command surface.
 mod app_update;
+mod cdn;
 mod cs2;
 mod database;
 mod error;
@@ -68,7 +69,6 @@ fn select_steam_path(
 
 fn sync_local_accounts(state: &AppState, path: &Path) -> AppResult<usize> {
     let accounts = remembered_accounts(steam::read_accounts(path)?);
-    steam::sync_avatar_cache(path, &state.data_dir.join("avatars"), &accounts)?;
     state.db.sync_accounts(&accounts)
 }
 
@@ -148,13 +148,18 @@ fn refresh_steam_profile_media(state: State<AppState>, force: bool) -> AppResult
     let Some(_guard) = state.profile_media_lock.try_lock() else {
         return Ok(0);
     };
+    let avatar_root = state.data_dir.join("avatars");
+    if let Ok(path) = steam_path(&state) {
+        let accounts = remembered_accounts(steam::read_accounts(&path)?);
+        let _ = steam::sync_avatar_cache(&path, &avatar_root, &accounts);
+    }
     let steam_ids = state
         .db
         .list_accounts()?
         .into_iter()
         .map(|account| account.steam_id64)
         .collect::<Vec<_>>();
-    steam::profile_media::sync(&state.data_dir.join("avatars"), &steam_ids, force)
+    steam::profile_media::sync(&avatar_root, &steam_ids, force)
 }
 #[tauri::command]
 fn list_accounts(state: State<AppState>) -> AppResult<Vec<Account>> {
@@ -532,19 +537,52 @@ fn current_status(state: State<AppState>) -> CurrentStatus {
     steam::status(path.as_deref())
 }
 
+fn steam_only_switch_enabled(value: Option<&str>) -> bool {
+    value
+        .and_then(|raw| serde_json::from_str::<bool>(raw).ok())
+        .unwrap_or(true)
+}
+
+fn linked_launch_platforms(platform_codes: &[String]) -> Vec<&'static str> {
+    ["5e", "perfectworld"]
+        .into_iter()
+        .filter(|code| platform_codes.iter().any(|item| item == *code))
+        .collect()
+}
+
+fn should_launch_linked_platforms(steam_only: bool, platform_codes: &[String]) -> bool {
+    !steam_only && !linked_launch_platforms(platform_codes).is_empty()
+}
+
+fn switch_success_message(launched: &[&str]) -> String {
+    if launched.is_empty() {
+        return "Steam 已按目标账号重新启动；未启动 CS2".into();
+    }
+    let names = launched
+        .iter()
+        .map(|code| match *code {
+            "5e" => "5E",
+            "perfectworld" => "完美",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join("、");
+    format!("Steam 已按目标账号重新启动，{names} 已启动或重启")
+}
+
 trait SwitchWorkflowExecutor {
     fn progress(&self, stage: &str, message: &str);
     fn shutdown_steam(&mut self) -> AppResult<()>;
     fn prepare_cs2_config(&mut self) -> AppResult<()>;
     fn switch_steam_account(&mut self) -> AppResult<()>;
     fn record_switch(&mut self) -> AppResult<()>;
-    fn restart_five_e(&mut self) -> AppResult<()>;
+    fn launch_linked_platforms(&mut self) -> AppResult<()>;
 }
 
 fn execute_switch_workflow(
     executor: &mut impl SwitchWorkflowExecutor,
     cs2_installed: bool,
-    restart_five_e: bool,
+    launch_platforms: bool,
 ) -> AppResult<Vec<String>> {
     executor.progress("closing_steam", "正在关闭 Steam");
     executor.shutdown_steam()?;
@@ -556,11 +594,11 @@ fn execute_switch_workflow(
     executor.switch_steam_account()?;
     executor.record_switch()?;
     let mut warnings = Vec::new();
-    if restart_five_e {
+    if launch_platforms {
         executor.progress("waiting_steam_login", "正在确认目标 Steam 账号已登录");
-        if let Err(error) = executor.restart_five_e() {
+        if let Err(error) = executor.launch_linked_platforms() {
             warnings.push(format!(
-                "Steam 账号已切换，但 5E 未能启动或重启：{}",
+                "Steam 账号已切换，但关联平台未能启动或重启：{}",
                 error.message
             ));
         }
@@ -576,6 +614,8 @@ struct LocalSwitchWorkflowExecutor<'a> {
     steam_id64: &'a str,
     shutdown_timeout: u64,
     startup_timeout: u64,
+    launch_five_e: bool,
+    launch_perfect_world: bool,
     on_event: &'a Channel<SwitchProgress>,
 }
 
@@ -616,6 +656,27 @@ impl SwitchWorkflowExecutor for LocalSwitchWorkflowExecutor<'_> {
         self.state.db.mark_switched(self.steam_id64)
     }
 
+    fn launch_linked_platforms(&mut self) -> AppResult<()> {
+        let mut errors = Vec::new();
+        if self.launch_five_e {
+            if let Err(error) = self.restart_five_e() {
+                errors.push(format!("5E：{}", error.message));
+            }
+        }
+        if self.launch_perfect_world {
+            if let Err(error) = self.restart_perfect_world() {
+                errors.push(format!("完美：{}", error.message));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::new("PLATFORM_LAUNCH_FAILED", errors.join("；")))
+        }
+    }
+}
+
+impl LocalSwitchWorkflowExecutor<'_> {
     fn restart_five_e(&mut self) -> AppResult<()> {
         let app = resolve_software_app(self.state, "5e")?;
         let readiness = steam::wait_for_five_e_readiness(self.steam_id64, || {
@@ -632,6 +693,15 @@ impl SwitchWorkflowExecutor for LocalSwitchWorkflowExecutor<'_> {
         }
         self.progress("starting_five_e", "Steam 已就绪，正在启动或重启 5E");
         steam::restart_five_e(&app, Duration::from_secs(10))
+    }
+
+    fn restart_perfect_world(&mut self) -> AppResult<()> {
+        let app = resolve_software_app(self.state, "perfectworld")?;
+        self.progress(
+            "starting_perfect_world",
+            "Steam 已就绪，正在启动或重启完美平台",
+        );
+        steam::restart_perfect_world(&app, Duration::from_secs(10))
     }
 }
 
@@ -654,7 +724,7 @@ fn switch_account(
     }
     let started = Utc::now().to_rfc3339();
     let id = Uuid::new_v4().to_string();
-    let result = (|| -> AppResult<(Account, Vec<String>)> {
+    let result = (|| -> AppResult<(Account, bool, Vec<String>)> {
         let account = state
             .db
             .list_accounts()?
@@ -677,6 +747,14 @@ fn switch_account(
             .unwrap_or(20)
             .clamp(5, 120);
         let cs2_installed = cs2::is_installed(&dir);
+        let steam_only =
+            steam_only_switch_enabled(state.db.setting("steam_only_switch")?.as_deref());
+        let launch_five_e = !steam_only && account.platform_codes.iter().any(|code| code == "5e");
+        let launch_perfect_world = !steam_only
+            && account
+                .platform_codes
+                .iter()
+                .any(|code| code == "perfectworld");
         let mut executor = LocalSwitchWorkflowExecutor {
             state: state.inner(),
             steam_dir: &dir,
@@ -684,26 +762,28 @@ fn switch_account(
             steam_id64: &steam_id64,
             shutdown_timeout,
             startup_timeout,
+            launch_five_e,
+            launch_perfect_world,
             on_event: &on_event,
         };
-        let restart_five_e = account.platform_codes.iter().any(|code| code == "5e");
-        let warnings = execute_switch_workflow(&mut executor, cs2_installed, restart_five_e)?;
-        Ok((account, warnings))
+        let launch_platforms = should_launch_linked_platforms(steam_only, &account.platform_codes);
+        let warnings = execute_switch_workflow(&mut executor, cs2_installed, launch_platforms)?;
+        Ok((account, steam_only, warnings))
     })();
     state.switch_lock.store(false, Ordering::Release);
     let finished = Utc::now().to_rfc3339();
     let (outcome, message, account_id, masked) = match &result {
-        Ok((account, warnings)) if warnings.is_empty() => (
+        Ok((account, steam_only, warnings)) if warnings.is_empty() => (
             "success",
-            if account.platform_codes.iter().any(|code| code == "5e") {
-                "Steam 已按目标账号重新启动，5E 已启动或重启".to_string()
+            switch_success_message(&if *steam_only {
+                Vec::new()
             } else {
-                "Steam 已按目标账号重新启动；未启动 CS2".to_string()
-            },
+                linked_launch_platforms(&account.platform_codes)
+            }),
             Some(account.id.clone()),
             account.account_name.as_deref().map(mask_name),
         ),
-        Ok((account, warnings)) => (
+        Ok((account, _, warnings)) => (
             "success_with_warning",
             warnings.join("；"),
             Some(account.id.clone()),
@@ -712,7 +792,7 @@ fn switch_account(
         Err(e) => ("failed", e.message.clone(), None, None),
     };
     state.db.0.lock().execute("INSERT INTO switch_logs(id,steam_account_id,account_name,started_at,finished_at,result,error_message) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,account_id,masked,started,finished,outcome,if outcome=="failed" || outcome=="success_with_warning"{Some(message.clone())}else{None}])?;
-    result.map(|(_, warnings)| SwitchResult {
+    result.map(|(_, _, warnings)| SwitchResult {
         success: true,
         stage: if warnings.is_empty() {
             "completed".into()
@@ -761,6 +841,7 @@ fn validate_setting(key: &str, value: &Value) -> AppResult<()> {
         "platform_order",
         "account_order",
         "cfg_command_definitions",
+        "steam_only_switch",
     ];
     if !allowed.contains(&key) {
         return Err(AppError::new("SETTING_NOT_ALLOWED", "不允许修改该设置"));
@@ -788,6 +869,12 @@ fn validate_setting(key: &str, value: &Value) -> AppResult<()> {
         return Err(AppError::new(
             "SETTING_INVALID",
             "账号顺序必须是 Steam ID 数组",
+        ));
+    }
+    if key == "steam_only_switch" && !value.is_boolean() {
+        return Err(AppError::new(
+            "SETTING_INVALID",
+            "只切 Steam 开关必须是布尔值",
         ));
     }
     Ok(())
@@ -1082,12 +1169,24 @@ fn list_software_statuses(state: State<AppState>) -> AppResult<Vec<SoftwareStatu
             "browser_fallback",
         ),
         SoftwareStatus {
+            code: "steam".to_string(),
+            name: "Steam".to_string(),
+            installed: steam_path(&state)
+                .ok()
+                .is_some_and(|path| path.join("steam.exe").is_file()),
+            executable_path: steam_path(&state)
+                .ok()
+                .map(|path| path.join("steam.exe").to_string_lossy().into_owned()),
+            download_mode: "managed".to_string(),
+            official_url: crate::cdn::STEAM_SETUP_URL.to_string(),
+        },
+        SoftwareStatus {
             code: "teamspeak3".to_string(),
             name: "TeamSpeak 3".to_string(),
             installed: teamspeak.is_some(),
             executable_path: teamspeak.map(|app| app.executable_path),
             download_mode: "managed".to_string(),
-            official_url: software::TEAMSPEAK_DOWNLOAD_PAGE.to_string(),
+            official_url: crate::cdn::TEAMSPEAK_CLIENT_URL.to_string(),
         },
     ])
 }
@@ -1629,7 +1728,7 @@ mod tests {
     }
 
     #[test]
-    fn switch_restarts_five_e_only_for_linked_accounts() {
+    fn switch_launches_linked_platforms_when_requested() {
         let mut executor = RecordingSwitchWorkflowExecutor::default();
 
         let warnings =
@@ -1642,15 +1741,15 @@ mod tests {
                 SwitchOperation::ShutdownSteam,
                 SwitchOperation::SwitchSteamAccount,
                 SwitchOperation::RecordSwitch,
-                SwitchOperation::RestartFiveE,
+                SwitchOperation::LaunchLinkedPlatforms,
             ]
         );
     }
 
     #[test]
-    fn five_e_restart_failure_keeps_the_steam_switch_successful() {
+    fn platform_launch_failure_keeps_the_steam_switch_successful() {
         let mut executor = RecordingSwitchWorkflowExecutor {
-            fail_five_e_restart: true,
+            fail_platform_launch: true,
             ..Default::default()
         };
 
@@ -1658,10 +1757,53 @@ mod tests {
             execute_switch_workflow(&mut executor, false, true).expect("Steam switch succeeds");
 
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("5E 未能启动或重启"));
+        assert!(warnings[0].contains("关联平台未能启动或重启"));
         assert_eq!(
             executor.operations.last(),
-            Some(&SwitchOperation::RestartFiveE)
+            Some(&SwitchOperation::LaunchLinkedPlatforms)
+        );
+    }
+
+    #[test]
+    fn steam_only_switch_defaults_to_enabled_and_skips_unlinked_accounts() {
+        assert!(steam_only_switch_enabled(None));
+        assert!(steam_only_switch_enabled(Some("true")));
+        assert!(!steam_only_switch_enabled(Some("false")));
+        assert_eq!(
+            linked_launch_platforms(&["5e".into(), "faceit".into()]),
+            vec!["5e"]
+        );
+        assert_eq!(
+            linked_launch_platforms(&["perfectworld".into(), "5e".into()]),
+            vec!["5e", "perfectworld"]
+        );
+        assert!(!should_launch_linked_platforms(
+            true,
+            &["5e".into(), "perfectworld".into()]
+        ));
+        assert!(!should_launch_linked_platforms(false, &["faceit".into()]));
+        assert!(should_launch_linked_platforms(
+            false,
+            &["perfectworld".into()]
+        ));
+        assert_eq!(
+            switch_success_message(&[]),
+            "Steam 已按目标账号重新启动；未启动 CS2"
+        );
+        assert_eq!(
+            switch_success_message(&["5e", "perfectworld"]),
+            "Steam 已按目标账号重新启动，5E、完美 已启动或重启"
+        );
+    }
+
+    #[test]
+    fn steam_only_switch_must_be_boolean() {
+        assert!(validate_setting("steam_only_switch", &Value::Bool(true)).is_ok());
+        assert_eq!(
+            validate_setting("steam_only_switch", &Value::String("true".into()))
+                .expect_err("string is invalid")
+                .code,
+            "SETTING_INVALID"
         );
     }
 
@@ -1671,13 +1813,13 @@ mod tests {
         PrepareCs2Config,
         SwitchSteamAccount,
         RecordSwitch,
-        RestartFiveE,
+        LaunchLinkedPlatforms,
     }
 
     #[derive(Default)]
     struct RecordingSwitchWorkflowExecutor {
         operations: Vec<SwitchOperation>,
-        fail_five_e_restart: bool,
+        fail_platform_launch: bool,
     }
 
     impl SwitchWorkflowExecutor for RecordingSwitchWorkflowExecutor {
@@ -1703,9 +1845,9 @@ mod tests {
             Ok(())
         }
 
-        fn restart_five_e(&mut self) -> AppResult<()> {
-            self.operations.push(SwitchOperation::RestartFiveE);
-            if self.fail_five_e_restart {
+        fn launch_linked_platforms(&mut self) -> AppResult<()> {
+            self.operations.push(SwitchOperation::LaunchLinkedPlatforms);
+            if self.fail_platform_launch {
                 Err(AppError::new("PLATFORM_LAUNCH_FAILED", "无法启动平台程序"))
             } else {
                 Ok(())

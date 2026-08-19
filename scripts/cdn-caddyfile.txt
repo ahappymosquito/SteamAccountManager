@@ -1,0 +1,28 @@
+qrqto.club, www.qrqto.club {
+	encode zstd gzip
+
+	@api path /api /api/*
+	handle @api {
+		uri strip_prefix /api
+		reverse_proxy backend:8000
+	}
+
+	handle /docs {
+		reverse_proxy backend:8000
+	}
+
+	handle /openapi.json {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+}
+
+cdn.qrqto.club {
+	root * /srv/cdn
+	file_server
+	header Cache-Control "public, max-age=300"
+	header Access-Control-Allow-Origin *
+}

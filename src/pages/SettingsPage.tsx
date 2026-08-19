@@ -11,18 +11,16 @@ import {
   ExternalLink,
   GitBranch,
   KeyRound,
-  RefreshCw,
   Save,
-  ShieldCheck,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
 import { api } from "../lib/api";
+import { CDN_BASE_URL } from "../lib/cdn";
 import {
   APP_ICON_PATH,
   APP_NAME,
-  GITHUB_RELEASES_URL,
   GITHUB_REPOSITORY_URL,
 } from "../lib/appMeta";
 import type {
@@ -67,10 +65,6 @@ export function SettingsPage({
   notify,
   onConfigured,
   update,
-  updateProgress,
-  checkingUpdate = false,
-  onCheckUpdate,
-  onInstallUpdate,
 }: {
   notify: (kind: "success" | "error", text: string) => void;
   onConfigured: () => void;
@@ -237,22 +231,6 @@ export function SettingsPage({
       setBackupBusy(false);
     }
   };
-  const updateBusy =
-    updateProgress?.state === "downloading" ||
-    updateProgress?.state === "installing";
-  const updatePercent =
-    updateProgress?.state === "downloading" && updateProgress.total
-      ? Math.min(
-          100,
-          Math.round(
-            (updateProgress.downloaded / updateProgress.total) * 100,
-          ),
-        )
-      : undefined;
-  const updateActionLabel = update?.portable
-    ? "安装新版并转为安装版"
-    : "更新并重启";
-
   return (
     <section className="settings-page-layout">
       <header className="page-heading">
@@ -506,90 +484,24 @@ export function SettingsPage({
             </button>
             <button
               className="button secondary"
-              onClick={() => void openExternal(GITHUB_RELEASES_URL)}
+              onClick={() => void openExternal(CDN_BASE_URL)}
             >
               <ExternalLink />
-              查看 Releases
+              下载安装包
             </button>
           </div>
         </div>
-        <div className="app-update-section" aria-live="polite">
+        <div className="app-update-section">
           <div>
             <h3>
               <Download />
               应用更新
             </h3>
-            {update ? (
-              <>
-                <p>
-                  可更新至 <strong>v{update.version}</strong>
-                  {update.portable
-                    ? "。当前为便携版，更新后将安装到当前用户目录。"
-                    : "。安装完成后应用会自动重启。"}
-                </p>
-                {update.notes && (
-                  <details className="update-notes">
-                    <summary>查看版本说明</summary>
-                    <p>{update.notes}</p>
-                  </details>
-                )}
-              </>
-            ) : (
-              <p>当前版本 v{version}，可手动检查 GitHub Release。</p>
-            )}
-            {updateProgress && updateProgress.state !== "checking" && (
-              <div className={`update-status ${updateProgress.state}`}>
-                {updateProgress.state === "downloading" &&
-                  `正在下载${updatePercent === undefined ? "" : ` ${updatePercent}%`}`}
-                {updateProgress.state === "installing" && "正在安装更新"}
-                {updateProgress.state === "completed" && "更新安装完成"}
-                {updateProgress.state === "error" &&
-                  (updateProgress.message || "更新失败，请重试")}
-              </div>
-            )}
+            <p>
+              检查更新和安装都在左侧栏底部。点「更新」后自动下载、安装并重启，无需再选其他选项。
+              {update ? ` 当前可更新至 v${update.version}。` : ` 当前版本 v${version}。`}
+            </p>
           </div>
-          <div className="app-update-actions">
-            <button
-              className="button secondary"
-              disabled={checkingUpdate || updateBusy}
-              onClick={onCheckUpdate}
-            >
-              <RefreshCw className={checkingUpdate ? "spin-icon" : undefined} />
-              {checkingUpdate ? "正在检查" : "检查更新"}
-            </button>
-            {update && (
-              <button
-                className="button primary"
-                disabled={updateBusy}
-                onClick={onInstallUpdate}
-              >
-                {updateBusy && <RefreshCw className="spin-icon" />}
-                {updateBusy ? "正在更新" : updateActionLabel}
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="safety-overview">
-          <h3>
-            <ShieldCheck />
-            账号安全边界
-          </h3>
-          <p>
-            本应用只切换 Steam 官方客户端已记住且本机仍有效的登录状态，不接触账号认证过程。
-          </p>
-          <ul>
-            <li>
-              不保存 Steam 密码、Cookie 或 Steam Guard
-              密钥；可选的 5E Token 仅保存在 Windows 凭据管理器。
-            </li>
-            <li>
-              不注入 Steam 或游戏进程，不读写进程内存，不绕过验证，也不操作反作弊系统。
-            </li>
-            <li>
-              现有实现不包含通常与作弊封禁相关的技术行为，但本项目不能代表 Valve
-              承诺绝对零风险。
-            </li>
-          </ul>
         </div>
       </section>
       <section className="advanced-tools backup-tools" aria-labelledby="backup-tools-title">

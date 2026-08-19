@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Steam Account Manager",
-  "version": "0.11.6",
+  "version": "0.11.8",
   "identifier": "com.steamaccountmanager.desktop",
   "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
   "app": {
@@ -15,7 +15,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGQ0RBNjI1RDBDQkUwNEIKUldSTDRNdlFKYWJOSDkwd0ExekJiQU5sQnNMRTRHcnR1Q0NDNjdEV0hzYllmR0p2RWlyRFZOMDcK",
       "endpoints": [
-        "https://github.com/ahappymosquito/SteamAccountManager/releases/latest/download/latest.json"
+        "https://cdn.qrqto.club/app/latest.json"
       ],
       "windows": {
         "installMode": "passive"

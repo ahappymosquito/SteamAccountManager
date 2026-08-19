@@ -21,6 +21,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => windowApi,
 }));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: () => Promise.resolve("0.11.8"),
+}));
 
 import App from "./App";
 
@@ -104,12 +107,16 @@ describe("account scanning", () => {
     const scanButton = container.querySelector<HTMLButtonElement>(
       ".toolbar .button.primary",
     )!;
-    expect(scanButton).toBeDisabled();
-    expect(scanButton).toHaveAttribute("aria-busy", "true");
-    expect(scanButton.querySelector(".spin-icon")).toBeInTheDocument();
+    expect(scanButton).toBeEnabled();
+    fireEvent.click(screen.getAllByRole("button", { name: /切换账号/ })[0]);
 
     initialize.resolve(startupResult);
-    await waitFor(() => expect(scanButton).toBeEnabled());
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("refresh_steam_profile_media", {
+        force: false,
+      }),
+    );
+    expect(scanButton).toBeEnabled();
   });
 
   it("coalesces repeated manual scan clicks into one scan and one media refresh", async () => {
@@ -168,5 +175,24 @@ describe("account scanning", () => {
       key: "account_order",
       value: [accounts[1].steamId64, accounts[0].steamId64],
     });
+  });
+
+  it("persists the steam-only switch from the account toolbar", async () => {
+    render(<App />);
+    const toggle = await screen.findByRole("button", { name: "只切 Steam" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText("不保存密码、Cookie、Token 或 Steam Guard 密钥")).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(await screen.findByRole("button", { name: "只切 Steam" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("set_setting", {
+        key: "steam_only_switch",
+        value: false,
+      }),
+    );
   });
 });

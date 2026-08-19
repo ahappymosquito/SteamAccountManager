@@ -1,4 +1,5 @@
 //! Official software discovery and verified installer download workflows.
+use crate::cdn::{STEAM_SETUP_FILE, STEAM_SETUP_URL, TEAMSPEAK_CLIENT_FILE, TEAMSPEAK_CLIENT_URL};
 use crate::error::{AppError, AppResult};
 use crate::models::DownloadProgress;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -146,52 +147,20 @@ fn perfect_spec(client: &Client) -> AppResult<DownloadSpec> {
     })
 }
 
-fn teamspeak_spec(client: &Client) -> AppResult<DownloadSpec> {
-    let html = client
-        .get(TEAMSPEAK_DOWNLOAD_PAGE)
-        .send()
-        .and_then(|response| response.error_for_status())
-        .map_err(|error| {
-            AppError::new("DOWNLOAD_METADATA_FAILED", "无法读取 TeamSpeak 官方下载页")
-                .detail(error.to_string())
-        })?
-        .text()
-        .map_err(|error| {
-            AppError::new("DOWNLOAD_METADATA_FAILED", "TeamSpeak 下载页格式无效")
-                .detail(error.to_string())
-        })?;
-    let package_marker = "TeamSpeak3-Client-win64-";
-    let package = html
-        .find(package_marker)
-        .ok_or_else(|| AppError::new("DOWNLOAD_METADATA_INVALID", "未找到 TeamSpeak 3 安装包"))?;
-    let marker = "https://files.teamspeak-services.com/releases/client/";
-    let start = html[..package]
-        .rfind(marker)
-        .ok_or_else(|| AppError::new("DOWNLOAD_METADATA_INVALID", "TeamSpeak 安装包地址无效"))?;
-    let tail = &html[start..];
-    let end = tail
-        .find(".exe")
-        .map(|index| index + 4)
-        .ok_or_else(|| AppError::new("DOWNLOAD_METADATA_INVALID", "TeamSpeak 安装包地址无效"))?;
-    let url = tail[..end].replace("&amp;", "&");
-    let file_name = url
-        .rsplit('/')
-        .next()
-        .filter(|name| name.starts_with(package_marker))
-        .ok_or_else(|| AppError::new("DOWNLOAD_METADATA_INVALID", "未找到 TeamSpeak 3 x64 安装包"))?
-        .to_string();
-    Ok(DownloadSpec {
-        url,
-        file_name,
+fn cdn_spec(url: &str, file_name: &str) -> DownloadSpec {
+    DownloadSpec {
+        url: url.to_string(),
+        file_name: file_name.to_string(),
         expected_size: None,
         expected_sha512: None,
-    })
+    }
 }
 
 fn spec(code: &str, client: &Client) -> AppResult<DownloadSpec> {
     match code {
         "perfectworld" => perfect_spec(client),
-        "teamspeak3" => teamspeak_spec(client),
+        "steam" => Ok(cdn_spec(STEAM_SETUP_URL, STEAM_SETUP_FILE)),
+        "teamspeak3" => Ok(cdn_spec(TEAMSPEAK_CLIENT_URL, TEAMSPEAK_CLIENT_FILE)),
         "5e" => Err(AppError::new(
             "DOWNLOAD_BROWSER_REQUIRED",
             "5E 官方下载需要浏览器完成安全验证",
@@ -522,6 +491,20 @@ pub fn discover_teamspeak() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::io;
+
+    #[test]
+    fn uses_cdn_installers_for_steam_and_teamspeak() {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(1))
+            .build()
+            .expect("client");
+        let steam = spec("steam", &client).expect("steam spec");
+        let teamspeak = spec("teamspeak3", &client).expect("teamspeak spec");
+        assert_eq!(steam.url, STEAM_SETUP_URL);
+        assert_eq!(steam.file_name, STEAM_SETUP_FILE);
+        assert_eq!(teamspeak.url, TEAMSPEAK_CLIENT_URL);
+        assert_eq!(teamspeak.file_name, TEAMSPEAK_CLIENT_FILE);
+    }
 
     #[test]
     fn parses_perfect_metadata_fields() {

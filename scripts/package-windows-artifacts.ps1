@@ -117,6 +117,14 @@ foreach ($artifact in $artifacts) {
     Write-Output ("{0}`t{1} bytes" -f $artifact.FullName, $artifact.Length)
 }
 
+$publishCdn = Join-Path $PSScriptRoot "publish-cdn.ps1"
+try {
+    & $publishCdn
+}
+catch {
+    Write-Warning "CDN publish skipped: $_"
+}
+
 foreach ($buildDirectory in @(
     (Join-Path $projectRoot "src-tauri\target"),
     (Join-Path $projectRoot "dist")

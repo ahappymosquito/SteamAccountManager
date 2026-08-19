@@ -1,4 +1,4 @@
-/** Settings tests for switching preferences, project safety details, credentials, and recovery tools. */
+/** Settings tests for switching preferences, project links, credentials, and recovery tools. */
 import {
   cleanup,
   fireEvent,
@@ -104,16 +104,12 @@ describe("SettingsPage", () => {
     });
   });
 
-  it("shows the local version, safety boundaries, and official project links", async () => {
+  it("shows the local version and official project links", async () => {
     render(<SettingsPage notify={vi.fn()} onConfigured={vi.fn()} />);
 
     expect(await screen.findByText("v0.4.2")).toBeInTheDocument();
-    expect(
-      screen.getByText(/不注入 Steam 或游戏进程/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/不能代表 Valve 承诺绝对零风险/),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("账号安全边界")).not.toBeInTheDocument();
+    expect(screen.queryByText(/不保存 Steam 密码/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "查看 GitHub" }));
     await waitFor(() =>
@@ -122,11 +118,9 @@ describe("SettingsPage", () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "查看 Releases" }));
+    fireEvent.click(screen.getByRole("button", { name: "下载安装包" }));
     await waitFor(() =>
-      expect(mocks.openUrl).toHaveBeenCalledWith(
-        "https://github.com/ahappymosquito/SteamAccountManager/releases",
-      ),
+      expect(mocks.openUrl).toHaveBeenCalledWith("https://cdn.qrqto.club"),
     );
   });
 
@@ -139,7 +133,7 @@ describe("SettingsPage", () => {
       screen.getByRole("button", { name: "查看 GitHub" }),
     ).toBeEnabled();
     expect(
-      screen.getByRole("button", { name: "查看 Releases" }),
+      screen.getByRole("button", { name: "下载安装包" }),
     ).toBeEnabled();
   });
 
@@ -279,9 +273,7 @@ describe("SettingsPage", () => {
     expect(mocks.restoreBackupFile).not.toHaveBeenCalled();
   });
 
-  it("shows signed update details and portable conversion action", async () => {
-    const onCheckUpdate = vi.fn();
-    const onInstallUpdate = vi.fn();
+  it("points users to the sidebar for one-click updates", async () => {
     render(
       <SettingsPage
         notify={vi.fn()}
@@ -292,21 +284,11 @@ describe("SettingsPage", () => {
           notes: "新增自动更新",
           portable: true,
         }}
-        updateProgress={{
-          state: "downloading",
-          downloaded: 25,
-          total: 100,
-        }}
-        onCheckUpdate={onCheckUpdate}
-        onInstallUpdate={onInstallUpdate}
       />,
     );
 
-    expect(await screen.findByText("v0.5.0")).toBeInTheDocument();
-    expect(screen.getByText(/当前为便携版/)).toBeInTheDocument();
-    expect(screen.getByText("正在下载 25%")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /正在更新/ }),
-    ).toBeDisabled();
+    expect(await screen.findByText(/当前可更新至 v0.5.0/)).toBeInTheDocument();
+    expect(screen.getByText(/左侧栏底部/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /转为安装版/ })).not.toBeInTheDocument();
   });
 });

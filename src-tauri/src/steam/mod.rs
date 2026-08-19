@@ -596,8 +596,13 @@ fn normalized_windows_path(path: &Path) -> String {
         .to_ascii_lowercase()
 }
 
-fn is_five_e_process(process_name: &str, process_path: Option<&Path>, app: &PlatformApp) -> bool {
-    if !FIVE_E_EXECUTABLES
+fn is_configured_platform_process(
+    process_name: &str,
+    process_path: Option<&Path>,
+    app: &PlatformApp,
+    allowed_names: &[&str],
+) -> bool {
+    if !allowed_names
         .iter()
         .any(|allowed| process_name.eq_ignore_ascii_case(allowed))
     {
@@ -627,20 +632,41 @@ fn is_five_e_process(process_name: &str, process_path: Option<&Path>, app: &Plat
         .is_some_and(|suffix| suffix.starts_with('\\'))
 }
 
-fn five_e_process_ids(system: &System, app: &PlatformApp) -> Vec<sysinfo::Pid> {
+fn is_five_e_process(process_name: &str, process_path: Option<&Path>, app: &PlatformApp) -> bool {
+    is_configured_platform_process(process_name, process_path, app, FIVE_E_EXECUTABLES)
+}
+
+fn is_perfect_world_process(
+    process_name: &str,
+    process_path: Option<&Path>,
+    app: &PlatformApp,
+) -> bool {
+    is_configured_platform_process(process_name, process_path, app, PERFECTWORLD_EXECUTABLES)
+}
+
+fn platform_process_ids(
+    system: &System,
+    app: &PlatformApp,
+    is_match: impl Fn(&str, Option<&Path>, &PlatformApp) -> bool,
+) -> Vec<sysinfo::Pid> {
     system
         .processes()
         .iter()
         .filter_map(|(pid, process)| {
-            is_five_e_process(&process.name().to_string_lossy(), process.exe(), app).then_some(*pid)
+            is_match(&process.name().to_string_lossy(), process.exe(), app).then_some(*pid)
         })
         .collect()
 }
 
-pub fn restart_five_e(app: &PlatformApp, shutdown_timeout: Duration) -> AppResult<()> {
+fn restart_configured_platform(
+    app: &PlatformApp,
+    display_name: &str,
+    shutdown_timeout: Duration,
+    is_match: impl Fn(&str, Option<&Path>, &PlatformApp) -> bool,
+) -> AppResult<()> {
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::All, true);
-    let process_ids = five_e_process_ids(&system, app);
+    let process_ids = platform_process_ids(&system, app, &is_match);
     for process_id in &process_ids {
         let Some(process) = system.process(*process_id) else {
             continue;
@@ -648,7 +674,7 @@ pub fn restart_five_e(app: &PlatformApp, shutdown_timeout: Duration) -> AppResul
         if !process.kill() {
             return Err(AppError::new(
                 "PLATFORM_SHUTDOWN_FAILED",
-                "无法关闭正在运行的 5E",
+                format!("无法关闭正在运行的 {display_name}"),
             ));
         }
     }
@@ -656,19 +682,32 @@ pub fn restart_five_e(app: &PlatformApp, shutdown_timeout: Duration) -> AppResul
         let started = Instant::now();
         loop {
             system.refresh_processes(ProcessesToUpdate::All, true);
-            if five_e_process_ids(&system, app).is_empty() {
+            if platform_process_ids(&system, app, &is_match).is_empty() {
                 break;
             }
             if started.elapsed() >= shutdown_timeout {
                 return Err(AppError::new(
                     "PLATFORM_SHUTDOWN_TIMEOUT",
-                    "等待 5E 退出超时",
+                    format!("等待 {display_name} 退出超时"),
                 ));
             }
             thread::sleep(Duration::from_millis(200));
         }
     }
     launch_platform(app)
+}
+
+pub fn restart_five_e(app: &PlatformApp, shutdown_timeout: Duration) -> AppResult<()> {
+    restart_configured_platform(app, "5E", shutdown_timeout, is_five_e_process)
+}
+
+pub fn restart_perfect_world(app: &PlatformApp, shutdown_timeout: Duration) -> AppResult<()> {
+    restart_configured_platform(
+        app,
+        "完美世界竞技平台",
+        shutdown_timeout,
+        is_perfect_world_process,
+    )
 }
 
 #[cfg(windows)]
@@ -1313,6 +1352,48 @@ mod atomic_write_tests {
             &app,
         ));
         assert!(!is_five_e_process("5EClient.exe", None, &app));
+    }
+
+    #[test]
+    fn perfect_world_process_matching_requires_allowlisted_name_and_install_directory() {
+        let app = PlatformApp {
+            platform_code: "perfectworld".into(),
+            name: "完美世界竞技平台".into(),
+            executable_path: r"C:\Games\PerfectWorldArena\完美世界竞技平台.exe".into(),
+            arguments: vec![],
+            working_directory: Some(r"C:\Games\PerfectWorldArena".into()),
+            prelaunch_check: true,
+        };
+
+        assert!(is_perfect_world_process(
+            "完美世界竞技平台.exe",
+            Some(Path::new(
+                r"C:\Games\PerfectWorldArena\完美世界竞技平台.exe"
+            )),
+            &app,
+        ));
+        assert!(is_perfect_world_process(
+            "PerfectWorld.exe",
+            Some(Path::new(
+                r"C:\Games\PerfectWorldArena\bin\PerfectWorld.exe"
+            )),
+            &app,
+        ));
+        assert!(!is_perfect_world_process(
+            "PerfectWorld.exe",
+            Some(Path::new(r"C:\Other\PerfectWorld.exe")),
+            &app,
+        ));
+        assert!(!is_perfect_world_process(
+            "unrelated.exe",
+            Some(Path::new(r"C:\Games\PerfectWorldArena\unrelated.exe")),
+            &app,
+        ));
+        assert!(!is_perfect_world_process(
+            "完美世界竞技平台.exe",
+            None,
+            &app
+        ));
     }
 
     #[test]

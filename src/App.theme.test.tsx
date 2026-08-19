@@ -21,6 +21,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => windowApi,
 }));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: () => Promise.resolve("0.11.8"),
+}));
 
 import App from "./App";
 
@@ -146,7 +149,7 @@ describe("App theme lifecycle", () => {
     expect(localStorage.getItem("sam-theme")).toBe("violet");
   });
 
-  it("checks silently on startup and links an available update to settings", async () => {
+  it("checks silently on startup and shows an update button in the sidebar", async () => {
     mockBackend(Promise.resolve({ theme: "glacier" }), {
       currentVersion: "0.4.3",
       version: "0.5.0",
@@ -155,12 +158,7 @@ describe("App theme lifecycle", () => {
     });
     render(<App />);
 
-    expect(
-      await screen.findByText("发现新版本 v0.5.0"),
-    ).toBeInTheDocument();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "查看详情" }));
-    expect(await screen.findByText("应用更新")).toBeInTheDocument();
-    expect(screen.getByText(/可更新至/)).toHaveTextContent("v0.5.0");
+    expect(await screen.findByText("可更新至 v0.5.0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更新" })).toBeEnabled();
   });
 });

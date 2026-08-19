@@ -11,17 +11,16 @@ import {
   RefreshCw,
   Search,
   Settings,
-  ShieldCheck,
   Star,
   UsersRound,
 } from "lucide-react";
 
+import { getVersion } from "@tauri-apps/api/app";
 import { AccountAvatar } from "./components/AccountAvatar";
 import {
   AccountPlatformBadges,
   type QuickPlatformCode,
 } from "./components/AccountPlatformBadges";
-import { AppUpdateBanner } from "./components/AppUpdateBanner";
 import { flushCfgDraft } from "./cfgWorkspace";
 import { AccountDrawer } from "./components/AccountDrawer";
 import { PlatformAccountDialog } from "./components/PlatformAccountDialog";
@@ -80,21 +79,22 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [tagOptions, setTagOptions] = useState<TagOption[]>([]);
   const [status, setStatus] = useState<CurrentStatus>();
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
   const [details, setDetails] = useState<Account>();
   const [platformEditor, setPlatformEditor] = useState<{
     account: Account;
     platform: QuickPlatformCode;
   }>();
   const [accountOrder, setAccountOrder] = useState<string[]>([]);
+  const [steamOnlySwitch, setSteamOnlySwitch] = useState(true);
   const [switching, setSwitching] = useState<Account>();
   const [loginSession, setLoginSession] = useState<SteamLoginSession>();
   const [theme, setTheme] = useState<Theme>(savedTheme());
   const [appUpdate, setAppUpdate] = useState<UpdateInfo>();
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress>();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [updateDismissed, setUpdateDismissed] = useState(false);
   const scanTask = useRef<AccountScanTask | undefined>(undefined);
 
   const notify = (kind: NoticeKind, text: string) => {
@@ -113,6 +113,7 @@ export default function App() {
       ]);
       setAccounts(items);
       setAccountOrder(normalizeAccountOrder(items, settings.account_order));
+      setSteamOnlySwitch(settings.steam_only_switch !== false);
       setStatus(current);
       setTagOptions(tags);
     } catch (error) {
@@ -133,7 +134,7 @@ export default function App() {
     }
 
     const task: AccountScanTask = {
-      visible: kind !== "silent",
+      visible: kind === "manual",
       promise: Promise.resolve(),
     };
     if (task.visible) setScanning(true);
@@ -151,10 +152,14 @@ export default function App() {
           accountCount = await api.scan();
         }
 
-        await load(false, kind !== "silent");
+        await load(false, kind === "manual");
         if (kind !== "silent") {
-          await api.refreshSteamProfileMedia(kind === "manual");
-          await load(false, kind === "manual");
+          void api
+            .refreshSteamProfileMedia(kind === "manual")
+            .then(() => load(false, false))
+            .catch((error) => {
+              if (kind === "manual") notify("error", errorMessage(error));
+            });
         }
         if (kind === "manual") {
           notify("success", `已同步 ${accountCount} 个本机 Steam 账号`);
@@ -184,7 +189,8 @@ export default function App() {
       }
     };
     void restoreTheme();
-    void load(true, false).finally(() => {
+    void getVersion().then(setAppVersion).catch(() => setAppVersion(""));
+    void load(false, false).finally(() => {
       if (active) startAccountScan("startup");
     });
     return () => {
@@ -208,7 +214,6 @@ export default function App() {
     try {
       const update = await api.checkAppUpdate();
       setAppUpdate(update ?? undefined);
-      setUpdateDismissed(false);
       setUpdateProgress(undefined);
       if (manual && !update) notify("success", "当前已是最新版本");
       return update;
@@ -279,6 +284,17 @@ export default function App() {
     void api.setSetting("theme", nextTheme).catch(() => {
       notify("error", "主题已预览，但未能保存到应用设置");
     });
+  };
+  const toggleSteamOnlySwitch = async () => {
+    const previous = steamOnlySwitch;
+    const next = !previous;
+    setSteamOnlySwitch(next);
+    try {
+      await api.setSetting("steam_only_switch", next);
+    } catch (error) {
+      setSteamOnlySwitch(previous);
+      notify("error", `切换模式保存失败：${errorMessage(error)}`);
+    }
   };
   const scan = () => {
     void startAccountScan("manual").promise;
@@ -398,21 +414,16 @@ export default function App() {
               onClick={() => ui.setPage("settings")}
             />
           </nav>
-          <div className="safety-note">
-            <ShieldCheck />
-            <span>不保存密码、Cookie、Token 或 Steam Guard 密钥</span>
-          </div>
+          <SidebarUpdate
+            version={appVersion}
+            update={appUpdate}
+            progress={updateProgress}
+            checking={checkingUpdate}
+            onCheck={() => void checkForUpdate(true)}
+            onInstall={() => void installUpdate()}
+          />
         </aside>
         <main className="content">
-          {appUpdate && !updateDismissed && (
-            <AppUpdateBanner
-              update={appUpdate}
-              progress={updateProgress}
-              onInstall={() => void installUpdate()}
-              onDismiss={() => setUpdateDismissed(true)}
-              onDetails={() => ui.setPage("settings")}
-            />
-          )}
           {ui.notice && (
             <div role="status" className={`notice ${ui.notice.kind}`}>
               {ui.notice.text}
@@ -437,6 +448,8 @@ export default function App() {
               onReorder={(sourceId, targetId) =>
                 void reorderAccounts(sourceId, targetId)
               }
+              steamOnlySwitch={steamOnlySwitch}
+              onSteamOnlySwitch={() => void toggleSteamOnlySwitch()}
               onSwitch={setSwitching}
               onFavorite={(account) =>
                 saveProfile({
@@ -507,6 +520,7 @@ export default function App() {
         <SwitchDialog
           account={switching}
           status={status}
+          steamOnlySwitch={steamOnlySwitch}
           open
           onOpenChange={(value) => !value && setSwitching(undefined)}
           onConfirm={performSwitch}
@@ -535,6 +549,82 @@ function Nav({
   );
 }
 
+function SidebarUpdate({
+  version,
+  update,
+  progress,
+  checking,
+  onCheck,
+  onInstall,
+}: {
+  version: string;
+  update?: UpdateInfo;
+  progress?: UpdateProgress;
+  checking: boolean;
+  onCheck: () => void;
+  onInstall: () => void;
+}) {
+  const busy =
+    progress?.state === "downloading" || progress?.state === "installing";
+  const percent =
+    progress?.total && progress.total > 0
+      ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
+      : undefined;
+  const status =
+    progress?.state === "downloading"
+      ? percent === undefined
+        ? "正在下载"
+        : `下载 ${percent}%`
+      : progress?.state === "installing"
+        ? "正在安装"
+        : progress?.state === "completed"
+          ? "即将重启"
+          : progress?.state === "error"
+            ? progress.message || "更新失败"
+            : update
+              ? `可更新至 v${update.version}`
+              : "已是最新";
+
+  return (
+    <footer className="sidebar-update">
+      <div>
+        <strong>{version ? `v${version}` : "版本"}</strong>
+        <span>{status}</span>
+      </div>
+      {busy && (
+        <div
+          className="sidebar-update-bar"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent ?? 0}
+        >
+          <i style={{ width: `${percent ?? 15}%` }} />
+        </div>
+      )}
+      {update ? (
+        <button
+          className="button primary"
+          disabled={busy}
+          onClick={onInstall}
+        >
+          {busy && <RefreshCw className="spin-icon" aria-hidden="true" />}
+          {busy ? status : "更新"}
+        </button>
+      ) : (
+        <button
+          className="button secondary"
+          disabled={checking || busy}
+          onClick={onCheck}
+        >
+          <RefreshCw className={checking ? "spin-icon" : undefined} />
+          {checking ? "检查中" : "检查更新"}
+        </button>
+      )}
+    </footer>
+  );
+}
+
 export function AccountsPage({
   accounts,
   tagOptions,
@@ -547,6 +637,8 @@ export function AccountsPage({
   onDetails,
   onPlatform,
   onReorder,
+  steamOnlySwitch,
+  onSteamOnlySwitch,
   onSwitch,
   onFavorite,
 }: {
@@ -561,6 +653,8 @@ export function AccountsPage({
   onDetails: (account: Account) => void;
   onPlatform: (account: Account, platform: QuickPlatformCode) => void;
   onReorder: (sourceId: string, targetId: string) => void;
+  steamOnlySwitch: boolean;
+  onSteamOnlySwitch: () => void;
   onSwitch: (account: Account) => void;
   onFavorite: (account: Account) => void;
 }) {
@@ -654,6 +748,22 @@ export function AccountsPage({
           {scanning ? "正在扫描" : "重新扫描"}
         </button>
       </section>
+      <button
+        type="button"
+        className={`list-switch${steamOnlySwitch ? " on" : ""}`}
+        aria-pressed={steamOnlySwitch}
+        title={
+          steamOnlySwitch
+            ? "只切换 Steam，不启动 5E 或完美。再点一次关闭。"
+            : "切号后启动已关联的 5E 和完美。再点一次打开只切 Steam。"
+        }
+        onClick={onSteamOnlySwitch}
+      >
+        <span>只切 Steam</span>
+        <span className="switch-track" aria-hidden="true">
+          <i className="switch-thumb" />
+        </span>
+      </button>
       {loading ? (
         <div className="skeleton-list" aria-label="正在加载">
           <i />
