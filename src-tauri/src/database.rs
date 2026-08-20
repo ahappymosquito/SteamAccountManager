@@ -1114,7 +1114,7 @@ impl Database {
                 id: Uuid::new_v4().to_string(),
                 name: "默认配置".to_string(),
                 file_name: "autoexec.cfg".to_string(),
-                content: String::new(),
+                content: include_str!("../../src/lib/cs2-autoexec.template.cfg").to_string(),
                 created_at: now.clone(),
                 updated_at: now,
             };
@@ -1539,6 +1539,8 @@ mod tests {
 
         let initial = db.ensure_active_cfg_profile().expect("default profile");
         assert_eq!(initial.file_name, "autoexec.cfg");
+        assert!(initial.content.contains("cl_crosshairstyle 4"));
+        assert!(initial.content.contains("cl_hud_telemetry_frametime_show"));
         assert_eq!(db.active_cfg_profile().expect("persisted").id, initial.id);
 
         let second = db

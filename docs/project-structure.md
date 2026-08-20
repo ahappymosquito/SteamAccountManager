@@ -60,7 +60,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 
 ### 页面
 
-- `pages/Cs2Page.tsx`：CFG 方案、可视化命令编辑、源码编辑与导入导出。
+- `pages/Cs2Page.tsx`：CFG 方案文件管理、源码编辑、注释刷新与导入导出。
 - `pages/PlatformsPage.tsx`：统一管理 Steam、5E、完美和 TeamSpeak 3 的发现、下载、路径配置、启动与可持久化拖拽顺序。
 - `pages/SettingsPage.tsx`：切换超时、默认折叠的平台凭据、统一数据导入导出与备份恢复。版本与更新入口在左侧栏底部。
 - 软件备份导出保持全量；恢复命令接收分类选择，并在数据库层按 SteamID64 将账号资料映射到本机当前可用账号。
@@ -70,14 +70,14 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 
 - 账号域：`AccountDrawer`、`PlatformAccountDialog`、`AccountAvatar`、`AccountPlatformBadges`、`PlayerDataPanel`。平台编辑由独立弹窗负责，详情抽屉仅以可展开卡片展示平台资料和战绩。
 - Steam 域：`CurrentSteamStatus`、`SteamLoginDialog`、`SwitchDialog`。
-- CFG 域：`CrosshairPreview`、`TagFilter`。
+- CFG 域：`TagFilter`。
 - 应用壳：`TitleBar`、`AppUpdateBanner`。
 
 ### 前端领域与边界
 
 - `lib/api.ts`：唯一的 Tauri IPC 门面，共集中声明账号、平台、CFG、软件、数据和更新命令。
 - `lib/types.ts`：前后端交换模型的 TypeScript 表示。
-- `lib/cfgDocument.ts`：无损 CFG 解析、命令定义、局部更新和序列化。
+- `lib/cfgDocument.ts`：无损 CFG 解析、当前 CS2 指令注释、默认模板和局部更新。
 - `lib/crosshair.ts`：准星命令读取、分享码与 CFG 输出。
 - `lib/filter.ts`：账号筛选。
 - `lib/themes.ts`：主题解析、持久化和 DOM 应用。

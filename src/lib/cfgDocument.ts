@@ -1,4 +1,5 @@
-/** Lossless CS2 CFG parsing, classification, and targeted text mutation utilities. */
+/** Lossless CS2 CFG parsing, current-command comments, and targeted text mutation. */
+
 export type CfgSectionId =
   | "crosshair"
   | "audio"
@@ -10,23 +11,12 @@ export type CfgSectionId =
   | "practice"
   | "other";
 
-export type CommandControl = "boolean" | "number" | "select" | "text";
-
-export type CommandDefinition = {
+export type CommandComment = {
   command: string;
-  label: string;
   section: CfgSectionId;
-  control: CommandControl;
-  description: string;
-  min?: number;
-  max?: number;
-  step?: number;
-  options?: Array<{ value: string; label: string }>;
-};
-
-export type CommandDefinitionFile = {
-  schemaVersion: 1;
-  definitions: CommandDefinition[];
+  comment: string;
+  example?: string;
+  obsolete?: boolean;
 };
 
 export type CfgCommandNode = {
@@ -54,11 +44,6 @@ export type CfgDocument = {
   commands: CfgCommandNode[];
 };
 
-const booleanOptions = [
-  { value: "0", label: "关闭" },
-  { value: "1", label: "开启" },
-];
-
 export const sectionLabels: Record<CfgSectionId, string> = {
   crosshair: "准星",
   audio: "声音与语音",
@@ -73,221 +58,118 @@ export const sectionLabels: Record<CfgSectionId, string> = {
 
 export const sectionOrder = Object.keys(sectionLabels) as CfgSectionId[];
 
-export const commandDefinitions: CommandDefinition[] = [
-  { command: "cl_crosshairstyle", label: "准星样式", section: "crosshair", control: "select", description: "选择默认、经典动态或经典静态样式。", options: [
-    { value: "0", label: "默认" }, { value: "1", label: "默认静态" }, { value: "2", label: "经典" },
-    { value: "3", label: "经典动态" }, { value: "4", label: "经典静态" }, { value: "5", label: "经典动态 2" },
-  ] },
-  { command: "cl_crosshairsize", label: "长度", section: "crosshair", control: "number", description: "每条准星线的长度。", min: 0, max: 20, step: 0.1 },
-  { command: "cl_crosshairgap", label: "间距", section: "crosshair", control: "number", description: "准星中心与线条之间的距离。", min: -10, max: 10, step: 0.1 },
-  { command: "cl_crosshairthickness", label: "粗细", section: "crosshair", control: "number", description: "准星线条粗细。", min: 0, max: 6, step: 0.1 },
-  { command: "cl_crosshairdot", label: "中心点", section: "crosshair", control: "boolean", description: "显示准星中心点。", options: booleanOptions },
-  { command: "cl_crosshair_drawoutline", label: "轮廓", section: "crosshair", control: "boolean", description: "为准星绘制深色轮廓。", options: booleanOptions },
-  { command: "cl_crosshair_outlinethickness", label: "轮廓粗细", section: "crosshair", control: "number", description: "准星轮廓的粗细。", min: 0, max: 3, step: 0.5 },
-  { command: "cl_crosshair_t", label: "T 型准星", section: "crosshair", control: "boolean", description: "隐藏顶部准星线。", options: booleanOptions },
-  { command: "cl_crosshaircolor", label: "颜色模式", section: "crosshair", control: "select", description: "0–4 为预设颜色，5 使用自定义 RGB。", options: [
-    { value: "0", label: "红色" }, { value: "1", label: "绿色" }, { value: "2", label: "黄色" },
-    { value: "3", label: "蓝色" }, { value: "4", label: "青色" }, { value: "5", label: "自定义 RGB" },
-  ] },
-  { command: "cl_crosshaircolor_r", label: "红色", section: "crosshair", control: "number", description: "自定义颜色的红色通道。", min: 0, max: 255, step: 1 },
-  { command: "cl_crosshaircolor_g", label: "绿色", section: "crosshair", control: "number", description: "自定义颜色的绿色通道。", min: 0, max: 255, step: 1 },
-  { command: "cl_crosshaircolor_b", label: "蓝色", section: "crosshair", control: "number", description: "自定义颜色的蓝色通道。", min: 0, max: 255, step: 1 },
-  { command: "cl_crosshairusealpha", label: "使用透明度", section: "crosshair", control: "boolean", description: "使用自定义透明度。", options: booleanOptions },
-  { command: "cl_crosshairalpha", label: "透明度", section: "crosshair", control: "number", description: "准星不透明度。", min: 0, max: 255, step: 1 },
-  { command: "cl_crosshair_recoil", label: "跟随后坐力", section: "crosshair", control: "boolean", description: "开火时让准星跟随后坐力。", options: booleanOptions },
-  { command: "cl_crosshairgap_useweaponvalue", label: "使用武器间距", section: "crosshair", control: "boolean", description: "按当前武器调整准星间距。", options: booleanOptions },
-  { command: "cl_fixedcrosshairgap", label: "固定间距", section: "crosshair", control: "number", description: "默认静态准星使用的固定间距。", min: -10, max: 10, step: 0.1 },
-  { command: "cl_crosshair_dynamic_splitdist", label: "动态分离距离", section: "crosshair", control: "number", description: "动态准星分离距离。", min: 0, max: 20, step: 1 },
-  { command: "cl_crosshair_dynamic_splitalpha_innermod", label: "内层透明倍率", section: "crosshair", control: "number", description: "动态准星内层透明倍率。", min: 0, max: 1, step: 0.05 },
-  { command: "cl_crosshair_dynamic_splitalpha_outermod", label: "外层透明倍率", section: "crosshair", control: "number", description: "动态准星外层透明倍率。", min: 0, max: 1, step: 0.05 },
-  { command: "cl_crosshair_dynamic_maxdist_splitratio", label: "动态分离比例", section: "crosshair", control: "number", description: "动态准星内外层分离比例。", min: 0, max: 1, step: 0.05 },
-  { command: "volume", label: "主音量", section: "audio", control: "number", description: "游戏总音量。", min: 0, max: 1, step: 0.01 },
-  { command: "snd_menumusic_volume", label: "菜单音乐", section: "audio", control: "number", description: "主菜单音乐音量。", min: 0, max: 1, step: 0.01 },
-  { command: "snd_roundstart_volume", label: "回合开始音乐", section: "audio", control: "number", description: "回合开始提示音乐音量。", min: 0, max: 1, step: 0.01 },
-  { command: "snd_roundend_volume", label: "回合结束音乐", section: "audio", control: "number", description: "回合结束提示音乐音量。", min: 0, max: 1, step: 0.01 },
-  { command: "snd_mvp_volume", label: "MVP 音乐", section: "audio", control: "number", description: "MVP 音乐音量。", min: 0, max: 1, step: 0.01 },
-  { command: "voice_modenable", label: "队伍语音", section: "audio", control: "boolean", description: "启用或关闭队伍语音。", options: booleanOptions },
-  { command: "voice_scale", label: "队友音量", section: "audio", control: "number", description: "队友语音音量倍率。", min: 0, max: 1, step: 0.01 },
-  { command: "sensitivity", label: "鼠标灵敏度", section: "input", control: "number", description: "鼠标灵敏度倍率。", min: 0.01, max: 20, step: 0.01 },
-  { command: "zoom_sensitivity_ratio", label: "开镜灵敏度", section: "input", control: "number", description: "开镜时的灵敏度倍率。", min: 0.1, max: 3, step: 0.01 },
-  { command: "cl_radar_scale", label: "雷达缩放", section: "hud", control: "number", description: "雷达地图缩放比例。", min: 0.25, max: 1, step: 0.01 },
-  { command: "cl_radar_always_centered", label: "雷达始终居中", section: "hud", control: "boolean", description: "让玩家始终位于雷达中心。", options: booleanOptions },
-  { command: "hud_scaling", label: "HUD 缩放", section: "hud", control: "number", description: "HUD 整体缩放比例。", min: 0.5, max: 0.95, step: 0.01 },
-  { command: "viewmodel_fov", label: "持枪视野", section: "hud", control: "number", description: "持枪模型视野。", min: 54, max: 68, step: 1 },
-  { command: "viewmodel_offset_x", label: "持枪横向位置", section: "hud", control: "number", description: "持枪模型左右偏移。", min: -2.5, max: 2.5, step: 0.1 },
-  { command: "viewmodel_offset_y", label: "持枪纵向位置", section: "hud", control: "number", description: "持枪模型前后偏移。", min: -2, max: 2, step: 0.1 },
-  { command: "viewmodel_offset_z", label: "持枪高度", section: "hud", control: "number", description: "持枪模型上下偏移。", min: -2, max: 2, step: 0.1 },
-  { command: "fps_max", label: "最大帧率", section: "performance", control: "number", description: "客户端最大帧率，0 表示不限制。", min: 0, max: 1000, step: 1 },
-  { command: "rate", label: "网络速率", section: "performance", control: "number", description: "客户端网络字节速率。", min: 98304, max: 1000000, step: 1 },
+export const commandComments: CommandComment[] = [
+  { command: "cl_crosshairstyle", section: "crosshair", example: "4", comment: "准星样式：2 经典动态（后坐力/散布反馈）；4 经典静态；0/1/3 已禁用；5 旧版动态（反馈不准）" },
+  { command: "cl_crosshairsize", section: "crosshair", example: "2", comment: "准星线长度" },
+  { command: "cl_crosshairgap", section: "crosshair", example: "-1", comment: "准星中心间距，可为负数" },
+  { command: "cl_crosshairthickness", section: "crosshair", example: "0.5", comment: "准星线条粗细，常见 0–6" },
+  { command: "cl_crosshairdot", section: "crosshair", example: "0", comment: "中心点：0 关 1 开" },
+  { command: "cl_crosshair_drawoutline", section: "crosshair", example: "1", comment: "深色轮廓：0 关 1 开" },
+  { command: "cl_crosshair_outlinethickness", section: "crosshair", example: "1", comment: "轮廓粗细 0–3" },
+  { command: "cl_crosshair_t", section: "crosshair", example: "0", comment: "T 型准星（隐藏上线）：0 关 1 开" },
+  { command: "cl_crosshaircolor", section: "crosshair", example: "1", comment: "颜色：0 红 1 绿 2 黄 3 蓝 4 青 5 自定义 RGB" },
+  { command: "cl_crosshaircolor_r", section: "crosshair", example: "50", comment: "自定义红色 0–255，需 color 5" },
+  { command: "cl_crosshaircolor_g", section: "crosshair", example: "250", comment: "自定义绿色 0–255，需 color 5" },
+  { command: "cl_crosshaircolor_b", section: "crosshair", example: "50", comment: "自定义蓝色 0–255，需 color 5" },
+  { command: "cl_crosshairusealpha", section: "crosshair", example: "1", comment: "使用自定义透明度：0 关 1 开" },
+  { command: "cl_crosshairalpha", section: "crosshair", example: "255", comment: "准星不透明度 0–255" },
+  { command: "cl_crosshair_recoil", section: "crosshair", example: "0", comment: "开火时准星跟随后坐力：0 关 1 开" },
+  { command: "cl_crosshairgap_useweaponvalue", section: "crosshair", example: "0", comment: "按当前武器调整间距（动态准星）：0 关 1 开" },
+  { command: "cl_crosshair_sniper_width", section: "crosshair", example: "1", comment: "狙击开镜准星线宽" },
+  { command: "cl_crosshair_dynamic_splitdist", section: "crosshair", example: "7", comment: "仅 style 2：内外准星分离距离" },
+  { command: "cl_crosshair_dynamic_splitalpha_innermod", section: "crosshair", example: "1", comment: "仅 style 2：内层透明倍率 0–1" },
+  { command: "cl_crosshair_dynamic_splitalpha_outermod", section: "crosshair", example: "0.5", comment: "仅 style 2：外层透明倍率 0.3–1" },
+  { command: "cl_crosshair_dynamic_maxdist_splitratio", section: "crosshair", example: "0.35", comment: "仅 style 2：内外层长度比 0–1" },
+  { command: "cl_fixedcrosshairgap", section: "crosshair", comment: "旧默认静态准星间距；style 0/1 已禁用，通常无效", obsolete: true },
+  { command: "volume", section: "audio", example: "1", comment: "游戏主音量 0–1" },
+  { command: "snd_menumusic_volume", section: "audio", example: "0", comment: "主菜单音乐音量 0–1" },
+  { command: "snd_roundstart_volume", section: "audio", example: "0", comment: "回合开始音乐 0–1" },
+  { command: "snd_roundend_volume", section: "audio", example: "0", comment: "回合结束音乐 0–1" },
+  { command: "snd_mvp_volume", section: "audio", example: "0", comment: "MVP 音乐 0–1" },
+  { command: "snd_mapobjective_volume", section: "audio", example: "0.3", comment: "地图目标提示音乐 0–1" },
+  { command: "snd_tensecondwarning_volume", section: "audio", example: "0.3", comment: "十秒警告音量 0–1" },
+  { command: "snd_deathcamera_volume", section: "audio", example: "0", comment: "死亡镜头音乐 0–1" },
+  { command: "snd_mute_losefocus", section: "audio", example: "0", comment: "切出游戏时静音：0 关 1 开" },
+  { command: "voice_modenable", section: "audio", example: "1", comment: "队伍语音总开关：0 关 1 开" },
+  { command: "snd_voipvolume", section: "audio", example: "1", comment: "队友语音音量 0–1（CS2 主控）" },
+  { command: "voice_always_sample_mic", section: "audio", example: "0", comment: "持续采样麦克风：0 关 1 开" },
+  { command: "voice_scale", section: "audio", comment: "已失效：CS2 队友语音音量改用 snd_voipvolume", obsolete: true },
+  { command: "sensitivity", section: "input", example: "1", comment: "鼠标灵敏度" },
+  { command: "zoom_sensitivity_ratio", section: "input", example: "1", comment: "开镜灵敏度倍率（CS2 使用此名）" },
+  { command: "zoom_sensitivity_ratio_mouse", section: "input", comment: "已失效：CS2 改用 zoom_sensitivity_ratio", obsolete: true },
+  { command: "cl_righthand", section: "input", example: "1", comment: "持枪左右手：1 右手 0 左手（CS2 已恢复）" },
+  { command: "cl_prefer_lefthanded", section: "input", example: "0", comment: "偏好左手持枪：0 关 1 开" },
+  { command: "hud_scaling", section: "hud", example: "0.85", comment: "HUD 整体缩放，CS2 常见 0.5–1" },
+  { command: "cl_hud_color", section: "hud", example: "0", comment: "HUD 颜色 0–11" },
+  { command: "cl_radar_scale", section: "hud", example: "0.4", comment: "雷达地图缩放 0.25–1" },
+  { command: "cl_radar_always_centered", section: "hud", example: "0", comment: "玩家是否固定在雷达中心：0 关 1 开" },
+  { command: "cl_radar_rotate", section: "hud", example: "1", comment: "雷达随视角旋转：0 关 1 开" },
+  { command: "cl_radar_icon_scale_min", section: "hud", example: "0.6", comment: "雷达图标最小缩放" },
+  { command: "cl_radar_square_with_scoreboard", section: "hud", example: "1", comment: "记分板打开时雷达改为方形：0 关 1 开" },
+  { command: "viewmodel_fov", section: "hud", example: "68", comment: "持枪模型视野 54–68" },
+  { command: "viewmodel_offset_x", section: "hud", example: "2.5", comment: "持枪模型左右偏移" },
+  { command: "viewmodel_offset_y", section: "hud", example: "0", comment: "持枪模型前后偏移" },
+  { command: "viewmodel_offset_z", section: "hud", example: "-1.5", comment: "持枪模型上下偏移" },
+  { command: "viewmodel_presetpos", section: "hud", example: "1", comment: "持枪预设：1 桌面 2 大衣 3 经典；改 offset 后以自定义为准" },
+  { command: "cl_showloadout", section: "hud", example: "1", comment: "始终显示装备栏：0 关 1 开" },
+  { command: "cl_hud_telemetry_frametime_show", section: "hud", example: "2", comment: "帧时间：0 关 1 异常时 2 始终（替代 net_graph）" },
+  { command: "cl_hud_telemetry_ping_show", section: "hud", example: "2", comment: "Ping：0 关 1 异常时 2 始终" },
+  { command: "cl_hud_telemetry_net_quality_graph_show", section: "hud", example: "1", comment: "网络质量图：0 关 1 异常时 2 始终" },
+  { command: "cl_hud_telemetry_server_misprediction_show", section: "hud", example: "1", comment: "服务器预测偏差：0 关 1 异常时 2 始终" },
+  { command: "net_graph", section: "hud", comment: "已失效：CS2 改用 cl_hud_telemetry_*_show", obsolete: true },
+  { command: "net_graphheight", section: "hud", comment: "已失效：随 net_graph 移除", obsolete: true },
+  { command: "net_graphpos", section: "hud", comment: "已失效：随 net_graph 移除", obsolete: true },
+  { command: "net_graphproportionalfont", section: "hud", comment: "已失效：随 net_graph 移除", obsolete: true },
+  { command: "fps_max", section: "performance", example: "0", comment: "最大帧率，0 表示不限制" },
+  { command: "rate", section: "performance", example: "786432", comment: "客户端网络字节速率" },
+  { command: "mm_dedicated_search_maxping", section: "performance", example: "80", comment: "匹配接受的最高延迟（毫秒）" },
+  { command: "cl_cmdrate", section: "performance", comment: "已失效：CS2 不再使用 CS:GO 的 cl_cmdrate", obsolete: true },
+  { command: "cl_updaterate", section: "performance", comment: "已失效：CS2 不再使用 CS:GO 的 cl_updaterate", obsolete: true },
+  { command: "cl_interp", section: "performance", comment: "已失效：CS2 网络插值不再用此 CS:GO 指令", obsolete: true },
+  { command: "cl_interp_ratio", section: "performance", comment: "已失效：CS2 网络插值不再用此 CS:GO 指令", obsolete: true },
+  { command: "mat_queue_mode", section: "performance", comment: "已失效：CS:GO 材质线程指令，CS2 无效", obsolete: true },
+  { command: "cl_forcepreload", section: "performance", comment: "已失效：CS:GO 预加载指令，CS2 无效", obsolete: true },
+  { command: "bind", section: "binds", comment: "绑定按键到命令，例如 bind \"f\" \"+lookatweapon\"" },
+  { command: "unbind", section: "binds", comment: "解除指定按键绑定" },
+  { command: "unbindall", section: "binds", comment: "清除全部按键绑定，执行后需重新绑定" },
+  { command: "alias", section: "scripts", comment: "定义命令别名" },
+  { command: "exec", section: "scripts", comment: "执行 cfg 目录中的其他配置文件" },
+  { command: "echo", section: "scripts", comment: "向控制台输出文本" },
+  { command: "host_writeconfig", section: "scripts", comment: "把当前设置写回游戏配置，可能覆盖注释与自定义 cfg" },
+  { command: "sv_cheats", section: "practice", comment: "作弊开关，仅本地/练习可用：0 关 1 开" },
 ];
 
-const definitionMap = new Map(
-  commandDefinitions.map((definition) => [definition.command, definition]),
+const commandCommentMap = new Map(
+  commandComments.map((item) => [item.command, item]),
 );
 
-export const definitionFor = (
-  command: string,
-  definitions: CommandDefinition[] = commandDefinitions,
-) =>
-  definitions === commandDefinitions
-    ? definitionMap.get(command.toLowerCase())
-    : definitions.find(
-        (definition) => definition.command === command.toLowerCase(),
-      );
+export const commentForCommand = (command: string) =>
+  commandCommentMap.get(command.toLowerCase());
 
-export function mergeCommandDefinitions(
-  customDefinitions: CommandDefinition[],
-) {
-  const merged = new Map(
-    commandDefinitions.map((definition) => [definition.command, definition]),
-  );
-  for (const definition of customDefinitions) {
-    merged.set(definition.command, definition);
+export function defaultCfgTemplate() {
+  const lines = [
+    "// Steam Account Manager 管理的 CS2 autoexec.cfg",
+    "// 切号时复制到游戏 game\\csgo\\cfg，并以 +exec 本文件名启动。",
+    "// 不会改写游戏实时生成的 .vcfg。可用「刷新注释」按当前 CS2 指令库更新行尾说明。",
+    "",
+  ];
+  let lastSection: CfgSectionId | undefined;
+  for (const item of commandComments) {
+    if (item.example === undefined) continue;
+    if (item.section !== lastSection) {
+      if (lastSection) lines.push("");
+      lines.push(`// --- ${sectionLabels[item.section]} ---`);
+      lastSection = item.section;
+    }
+    lines.push(`${item.command} ${item.example} // ${item.comment}`);
   }
-  return [...merged.values()];
+  lines.push("");
+  return lines.join("\n");
 }
 
-function stripJsonComments(source: string) {
-  let output = "";
-  let quoted = false;
-  let escaping = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    const next = source[index + 1];
-    if (quoted) {
-      output += character;
-      if (escaping) escaping = false;
-      else if (character === "\\") escaping = true;
-      else if (character === '"') quoted = false;
-    } else if (character === '"') {
-      quoted = true;
-      output += character;
-    } else if (character === "/" && next === "/") {
-      while (index < source.length && source[index] !== "\n") index += 1;
-      output += "\n";
-    } else if (character === "/" && next === "*") {
-      index += 2;
-      while (
-        index < source.length &&
-        !(source[index] === "*" && source[index + 1] === "/")
-      ) {
-        if (source[index] === "\n") output += "\n";
-        index += 1;
-      }
-      index += 1;
-    } else {
-      output += character;
-    }
-  }
-  return output;
-}
-
-const sectionIds = new Set<CfgSectionId>(sectionOrder);
-const controlIds = new Set<CommandControl>([
-  "boolean",
-  "number",
-  "select",
-  "text",
-]);
-
-export function parseCommandDefinitionFile(source: string): CommandDefinition[] {
-  let value: unknown;
-  try {
-    value = JSON.parse(stripJsonComments(source));
-  } catch {
-    throw new Error("参数库不是有效的 JSONC");
-  }
-  const file = value as Partial<CommandDefinitionFile>;
-  if (file.schemaVersion !== 1 || !Array.isArray(file.definitions)) {
-    throw new Error("参数库 schemaVersion 必须为 1，且 definitions 必须是数组");
-  }
-  const commands = new Set<string>();
-  return file.definitions.map((candidate, index) => {
-    const definition = candidate as Partial<CommandDefinition>;
-    const command = definition.command?.trim().toLowerCase() ?? "";
-    if (!/^[a-z_][a-z0-9_]*$/.test(command) || commands.has(command)) {
-      throw new Error(`definitions[${index}].command 无效或重复`);
-    }
-    commands.add(command);
-    if (
-      !definition.label?.trim() ||
-      !definition.description?.trim() ||
-      !definition.section ||
-      !sectionIds.has(definition.section) ||
-      !definition.control ||
-      !controlIds.has(definition.control)
-    ) {
-      throw new Error(`definitions[${index}] 缺少有效的名称、解释、分区或控件类型`);
-    }
-    if (
-      definition.control === "number" &&
-      ((definition.min !== undefined && !Number.isFinite(definition.min)) ||
-        (definition.max !== undefined && !Number.isFinite(definition.max)) ||
-        (definition.step !== undefined &&
-          (!Number.isFinite(definition.step) || definition.step <= 0)) ||
-        (definition.min !== undefined &&
-          definition.max !== undefined &&
-          definition.min >= definition.max))
-    ) {
-      throw new Error(`definitions[${index}] 的数字范围无效`);
-    }
-    if (
-      definition.control === "select" &&
-      (!Array.isArray(definition.options) ||
-        definition.options.length === 0 ||
-        definition.options.some(
-          (option) =>
-            typeof option?.value !== "string" ||
-            !option.label?.trim(),
-        ))
-    ) {
-      throw new Error(`definitions[${index}].options 无效`);
-    }
-    return {
-      command,
-      label: definition.label.trim(),
-      section: definition.section,
-      control: definition.control,
-      description: definition.description.trim(),
-      ...(definition.min === undefined ? {} : { min: definition.min }),
-      ...(definition.max === undefined ? {} : { max: definition.max }),
-      ...(definition.step === undefined ? {} : { step: definition.step }),
-      ...(definition.control === "boolean"
-        ? { options: booleanOptions }
-        : definition.options
-          ? { options: definition.options }
-          : {}),
-    };
-  });
-}
-
-export function serializeCommandDefinitionFile(
-  definitions: CommandDefinition[],
-) {
-  const prompt = `/*
-GPT 维护提示词：
-你正在维护 Steam Account Manager 的 CS2 CFG 参数库。
-请查证 CS2 当前可用的控制台命令，并只修改下方 definitions 数组。
-每项必须包含 command、label、section、control、description。
-section 只能是 crosshair、audio、binds、input、hud、performance、scripts、practice、other。
-control 只能是 boolean、number、select、text。
-number 应提供准确的 min、max、step；select 必须提供 value/label 选项；boolean 不需要 options。
-description 用简洁中文解释参数效果、单位和特殊值，不确定的范围不要猜测，可改用 text。
-保留 schemaVersion: 1，输出完整 JSONC，不要输出 Markdown 代码围栏或额外说明。
-*/`;
-  return `${prompt}\n${JSON.stringify(
-    { schemaVersion: 1, definitions },
-    null,
-    2,
-  )}\n`;
-}
-
-export function sectionForCommand(
-  command: string,
-  definitions: CommandDefinition[] = commandDefinitions,
-): CfgSectionId {
+export function sectionForCommand(command: string): CfgSectionId {
   const value = command.toLowerCase();
-  const defined = definitionFor(value, definitions);
+  const defined = commandCommentMap.get(value);
   if (defined) return defined.section;
   if (value.startsWith("cl_crosshair") || value === "cl_fixedcrosshairgap") return "crosshair";
   if (["bind", "unbind", "unbindall", "bindtoggle", "key_listboundkeys"].includes(value)) return "binds";
@@ -298,6 +180,65 @@ export function sectionForCommand(
   if (["alias", "exec", "echo", "toggle", "incrementvar", "wait"].includes(value)) return "scripts";
   if (["noclip", "god", "buddha", "map"].includes(value) || value.startsWith("sv_") || value.startsWith("mp_") || value.startsWith("bot_") || value.startsWith("ammo_") || value.startsWith("grenade_")) return "practice";
   return "other";
+}
+
+function trailingCommentIndex(line: string) {
+  let quoted = false;
+  let escaping = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (escaping) {
+      escaping = false;
+    } else if (
+      character === "\\" &&
+      quoted &&
+      (line[index + 1] === "\\" || line[index + 1] === '"')
+    ) {
+      escaping = true;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (!quoted && character === "/" && line[index + 1] === "/") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+export function annotateCfgComments(source: string) {
+  const bom = source.startsWith("\uFEFF");
+  const body = bom ? source.slice(1) : source;
+  const newline = body.includes("\r\n") ? "\r\n" : "\n";
+  const terminalNewline = body.endsWith("\n");
+  const lines = body.split(/\r?\n/);
+  if (terminalNewline && lines.at(-1) === "") lines.pop();
+
+  const document = parseCfg(source);
+  const commandsByLine = new Map<number, CfgCommandNode[]>();
+  for (const node of document.commands) {
+    const list = commandsByLine.get(node.line) ?? [];
+    list.push(node);
+    commandsByLine.set(node.line, list);
+  }
+
+  const annotated = lines.map((line, index) => {
+    const nodes = commandsByLine.get(index + 1);
+    if (!nodes?.length) return line;
+    let comment: string | undefined;
+    for (let cursor = nodes.length - 1; cursor >= 0; cursor -= 1) {
+      const found = commentForCommand(nodes[cursor].normalizedCommand);
+      if (found) {
+        comment = found.comment;
+        break;
+      }
+    }
+    if (!comment) return line;
+    const cut = trailingCommentIndex(line);
+    const code = (cut === -1 ? line : line.slice(0, cut)).trimEnd();
+    if (!code.trim()) return line;
+    return `${code} // ${comment}`;
+  });
+
+  return `${bom ? "\uFEFF" : ""}${annotated.join(newline)}${terminalNewline || body.length === 0 ? newline : ""}`;
 }
 
 function tokenize(input: string): string[] {
@@ -336,10 +277,7 @@ function firstTokenEnd(input: string): number {
   return index;
 }
 
-export function parseCfg(
-  source: string,
-  definitions: CommandDefinition[] = commandDefinitions,
-): CfgDocument {
+export function parseCfg(source: string): CfgDocument {
   const commands: CfgCommandNode[] = [];
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
   let lineStart = 0;
@@ -401,7 +339,7 @@ export function parseCfg(
         args: tokens.slice(1),
         argumentText: trimmed.slice(tokenEnd).trim(),
         raw: trimmed,
-        section: sectionForCommand(command, definitions),
+        section: sectionForCommand(command),
         line: lineNumber,
         start,
         end,

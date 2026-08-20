@@ -1,14 +1,14 @@
 /** Regression tests for lossless CFG parsing, categorization, and targeted edits. */
 import { describe, expect, it } from "vitest";
 import {
+  annotateCfgComments,
   appendCommand,
+  defaultCfgTemplate,
   duplicateCount,
   effectiveCommand,
   parseCfg,
-  parseCommandDefinitionFile,
   removeCommandNode,
   removeScalarCommand,
-  serializeCommandDefinitionFile,
   setScalarCommand,
   updateCommandNode,
 } from "./cfgDocument";
@@ -98,31 +98,27 @@ describe("CFG document", () => {
     );
   });
 
-  it("roundtrips a GPT-maintainable JSONC parameter library", () => {
-    const definitions = parseCommandDefinitionFile(`// maintained by GPT
-      {
-        "schemaVersion": 1,
-        "definitions": [{
-          "command": "cl_test_value",
-          "label": "测试参数",
-          "section": "other",
-          "control": "number",
-          "description": "测试范围。",
-          "min": 0,
-          "max": 10,
-          "step": 1
-        }]
-      }`);
-    const exported = serializeCommandDefinitionFile(definitions);
-    expect(exported).toContain("GPT 维护提示词");
-    expect(parseCommandDefinitionFile(exported)).toEqual(definitions);
+  it("annotates current CS2 commands and marks obsolete leftovers", () => {
+    const source =
+      "fps_max 300 // 旧说明\r\nnet_graph 1\r\nbind \"q\" \"lastinv\"\r\ncustom_cmd 1 // 保留\r\n";
+    expect(annotateCfgComments(source)).toBe(
+      "fps_max 300 // 最大帧率，0 表示不限制\r\nnet_graph 1 // 已失效：CS2 改用 cl_hud_telemetry_*_show\r\nbind \"q\" \"lastinv\" // 绑定按键到命令，例如 bind \"f\" \"+lookatweapon\"\r\ncustom_cmd 1 // 保留\r\n",
+    );
   });
 
-  it("rejects invalid controls, ranges, and duplicate commands", () => {
-    expect(() =>
-      parseCommandDefinitionFile(
-        '{"schemaVersion":1,"definitions":[{"command":"fps_max","label":"A","description":"A","section":"performance","control":"number","min":10,"max":1},{"command":"fps_max","label":"B","description":"B","section":"performance","control":"switch"}]}',
-      ),
-    ).toThrow(/数字范围无效|无效或重复/);
+  it("keeps the default template comments in sync with the command library", async () => {
+    const template = defaultCfgTemplate();
+    const bundled = (await import("./cs2-autoexec.template.cfg?raw")).default.replace(
+      /\r\n/g,
+      "\n",
+    );
+    expect(bundled).toBe(template);
+    expect(annotateCfgComments(template)).toBe(template);
+    expect(template).toContain("cl_hud_telemetry_frametime_show 2");
+    expect(template).toContain("snd_voipvolume 1");
+    expect(template).toContain("cl_righthand 1");
+    expect(template).toContain("zoom_sensitivity_ratio 1");
+    expect(template).not.toMatch(/(^|\n)net_graph /);
+    expect(template).not.toMatch(/(^|\n)voice_scale /);
   });
 });

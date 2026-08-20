@@ -1,4 +1,4 @@
-/** UI regressions for the compact CFG toolbar, visual/source sync, autosave, and export. */
+/** UI regressions for CFG file editing, comment refresh, autosave, and export. */
 import {
   cleanup,
   fireEvent,
@@ -7,6 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultCfgTemplate } from "../lib/cfgDocument";
 
 const profile = {
   id: "cfg-1",
@@ -33,8 +34,6 @@ const apiMock = vi.hoisted(() => ({
   exportCfgProfile: vi.fn(),
   settings: vi.fn(),
   setSetting: vi.fn(),
-  readCfgDefinitionFile: vi.fn(),
-  writeCfgDefinitionFile: vi.fn(),
 }));
 const dialogMock = vi.hoisted(() => ({
   open: vi.fn(),
@@ -51,42 +50,42 @@ describe("Cs2Page", () => {
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
     apiMock.activeCfgProfile.mockResolvedValue(profile);
     apiMock.cfgProfiles.mockResolvedValue([profile]);
     apiMock.setActiveCfgProfile.mockResolvedValue(secondaryProfile);
+    apiMock.createCfgProfile.mockImplementation(
+      async (name: string, fileName: string, content: string) => ({
+        id: "cfg-new",
+        name,
+        fileName,
+        content,
+        createdAt: "",
+        updatedAt: "",
+      }),
+    );
     apiMock.deleteCfgProfile.mockResolvedValue(undefined);
     apiMock.saveCfgProfile.mockResolvedValue(undefined);
     apiMock.exportCfgProfile.mockResolvedValue("C:\\exports\\autoexec.cfg");
     apiMock.settings.mockResolvedValue({});
     apiMock.setSetting.mockResolvedValue(undefined);
-    apiMock.writeCfgDefinitionFile.mockResolvedValue(
-      "C:\\exports\\cs2-cfg-parameters.jsonc",
-    );
     clipboardMock.writeText.mockResolvedValue(undefined);
   });
 
-  it("opens in visual mode and synchronizes a control back to source/autosave", async () => {
+  it("opens the source editor and autosaves edits", async () => {
     render(<Cs2Page notify={vi.fn()} />);
     await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
-    expect(
-      screen.getByRole("tab", { name: "可视化配置" }),
-    ).toHaveAttribute("aria-selected", "true");
-
-    fireEvent.click(screen.getByRole("button", { name: /性能与网络/ }));
-    fireEvent.change(screen.getByLabelText("最大帧率"), {
-      target: { value: "500" },
+    expect(screen.queryByRole("tab", { name: "可视化配置" })).not.toBeInTheDocument();
+    const editor = screen.getByLabelText("CFG 编辑器");
+    expect(editor).toHaveValue("fps_max 300\ncl_crosshairsize 2\n");
+    fireEvent.change(editor, {
+      target: { value: "fps_max 500\ncl_crosshairsize 2\n" },
     });
-    fireEvent.click(screen.getByRole("tab", { name: "CFG 源码" }));
-    expect(screen.getByLabelText("CFG 编辑器")).toHaveValue(
-      'fps_max "500"\ncl_crosshairsize 2\n',
-    );
     await waitFor(
       () =>
         expect(apiMock.saveCfgProfile).toHaveBeenCalledWith(
           "cfg-1",
           "主配置",
-          'fps_max "500"\ncl_crosshairsize 2\n',
+          "fps_max 500\ncl_crosshairsize 2\n",
         ),
       { timeout: 1500 },
     );
@@ -110,88 +109,72 @@ describe("Cs2Page", () => {
     );
   });
 
-  it("copies CFG crosshair commands and disables incomplete official codes", async () => {
+  it("copies CFG crosshair commands from the file", async () => {
     render(<Cs2Page notify={vi.fn()} />);
     await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
-    expect(
-      screen.getByRole("button", { name: "复制官方分享码" }),
-    ).toBeDisabled();
-    fireEvent.click(
-      screen.getByRole("button", { name: "复制 CFG 准星命令" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "复制准星命令" }));
     await waitFor(() =>
-      expect(clipboardMock.writeText).toHaveBeenCalledWith(
-        "cl_crosshairsize 2",
+      expect(clipboardMock.writeText).toHaveBeenCalledWith("cl_crosshairsize 2"),
+    );
+  });
+
+  it("refreshes known command comments without changing values", async () => {
+    const notify = vi.fn();
+    render(<Cs2Page notify={notify} />);
+    await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
+    fireEvent.click(screen.getByRole("button", { name: "刷新注释" }));
+    expect(screen.getByLabelText("CFG 编辑器")).toHaveValue(
+      "fps_max 300 // 最大帧率，0 表示不限制\ncl_crosshairsize 2 // 准星线长度\n",
+    );
+    expect(notify).toHaveBeenCalledWith(
+      "success",
+      "已按当前 CS2 指令库刷新行尾注释，命令值未改",
+    );
+  });
+
+  it("creates a new profile from the current CS2 template", async () => {
+    render(<Cs2Page notify={vi.fn()} />);
+    await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
+    fireEvent.click(screen.getByRole("button", { name: "新建 CFG" }));
+    await waitFor(() =>
+      expect(apiMock.createCfgProfile).toHaveBeenCalledWith(
+        "新配置 2",
+        expect.stringMatching(/^profile-\d{6}\.cfg$/),
+        defaultCfgTemplate(),
       ),
     );
+    expect(screen.getByLabelText("CFG 编辑器")).toHaveValue(defaultCfgTemplate());
   });
 
-  it("exports a JSONC parameter library with the GPT prompt at the top", async () => {
-    dialogMock.save.mockResolvedValue("C:\\exports\\cs2-cfg-parameters.jsonc");
+  it("fills an empty default profile with the annotated template", async () => {
+    apiMock.activeCfgProfile.mockResolvedValue({ ...profile, content: "" });
     render(<Cs2Page notify={vi.fn()} />);
-    await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
-    const exportLibrary = screen.getByRole("button", {
-      name: "导出 CFG 参数库",
-    });
-    expect(exportLibrary.closest(".editor-tabbar")).toBeInTheDocument();
-    fireEvent.click(exportLibrary);
-    await waitFor(() =>
-      expect(apiMock.writeCfgDefinitionFile).toHaveBeenCalled(),
+    const editor = await screen.findByLabelText("CFG 编辑器");
+    expect(editor).toHaveValue(defaultCfgTemplate());
+    await waitFor(
+      () =>
+        expect(apiMock.saveCfgProfile).toHaveBeenCalledWith(
+          "cfg-1",
+          "主配置",
+          defaultCfgTemplate(),
+        ),
+      { timeout: 1500 },
     );
-    const [, content] = apiMock.writeCfgDefinitionFile.mock.calls[0];
-    expect(content.startsWith("/*\nGPT 维护提示词：")).toBe(true);
-    expect(content).toContain('"schemaVersion": 1');
   });
 
-  it("imports, persists, and displays a custom parameter definition", async () => {
-    dialogMock.open.mockResolvedValue("C:\\imports\\cfg-parameters.jsonc");
-    apiMock.readCfgDefinitionFile.mockResolvedValue(`{
-      "schemaVersion": 1,
-      "definitions": [{
-        "command": "custom_training_note",
-        "label": "训练备注",
-        "section": "other",
-        "control": "text",
-        "description": "供训练脚本读取的文本备注。"
-      }]
-    }`);
-    render(<Cs2Page notify={vi.fn()} />);
-    await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
-    const importLibrary = screen.getByRole("button", {
-      name: "导入 CFG 参数库",
-    });
-    expect(importLibrary.closest(".editor-tabbar")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /添加命令到准星/ }),
-    ).toHaveAttribute("title", "添加到当前分区：准星");
-    fireEvent.click(importLibrary);
-    await waitFor(() =>
-      expect(apiMock.setSetting).toHaveBeenCalledWith(
-        "cfg_command_definitions",
-        expect.arrayContaining([
-          expect.objectContaining({ command: "custom_training_note" }),
-        ]),
-      ),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /其他命令/ }));
-    expect(screen.getByLabelText("训练备注")).toBeInTheDocument();
-  });
-
-  it("uses one global description and omits removed auxiliary tools and file identity", async () => {
+  it("uses one global description and omits visual tools and file identity", async () => {
     const { container } = render(<Cs2Page notify={vi.fn()} />);
     await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
     expect(
       screen.getByText(
-        "可视化或源码编辑 CFG，修改会自动保存；不会写入游戏实时文件，也不会启动游戏。",
+        "直接编辑 CFG 文件，修改会自动保存；不会写入游戏实时文件，也不会启动游戏。",
       ),
     ).toBeInTheDocument();
     expect(container.querySelector(".editor-file-name")).not.toBeInTheDocument();
     expect(screen.queryByText("历史版本与运行文件")).not.toBeInTheDocument();
-    expect(screen.queryByText("历史版本")).not.toBeInTheDocument();
-    expect(screen.queryByText("运行文件")).not.toBeInTheDocument();
-    expect(
-      screen.queryByText("修改会精准写回对应命令，并沿用 500ms 自动保存。"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "导入 CFG 参数库" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "导出 CFG 参数库" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制官方分享码" })).not.toBeInTheDocument();
   });
 
   it("switches profiles and supports inline rename with autosave", async () => {
