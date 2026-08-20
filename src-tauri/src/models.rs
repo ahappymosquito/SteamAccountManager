@@ -326,6 +326,9 @@ pub struct SoftwareStatus {
     pub executable_path: Option<String>,
     pub download_mode: String,
     pub official_url: String,
+    pub installed_version: Option<String>,
+    pub available_version: Option<String>,
+    pub update_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

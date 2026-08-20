@@ -8,6 +8,7 @@ mod models;
 mod player_query;
 mod software;
 mod steam;
+mod version;
 
 use crate::database::{validate_steam_id, Database};
 use crate::error::{AppError, AppResult};
@@ -1145,6 +1146,14 @@ fn list_software_statuses(state: State<AppState>) -> AppResult<Vec<SoftwareStatu
             .chain(discovered.iter())
             .find(|app| app.platform_code == code && Path::new(&app.executable_path).is_file())
             .map(|app| app.executable_path.clone());
+        let installed_version = software::installed_display_version(
+            path.as_deref().map(Path::new),
+            match code {
+                "perfectworld" => &["完美"],
+                "5e" => &["5e"],
+                _ => &[],
+            },
+        );
         SoftwareStatus {
             code: code.to_string(),
             name: name.to_string(),
@@ -1152,10 +1161,15 @@ fn list_software_statuses(state: State<AppState>) -> AppResult<Vec<SoftwareStatu
             executable_path: path,
             download_mode: download_mode.to_string(),
             official_url: official_url.to_string(),
+            installed_version,
+            available_version: None,
+            update_available: false,
         }
     };
+    let steam_exe = steam_path(&state).ok().map(|path| path.join("steam.exe"));
+    let steam_installed = steam_exe.as_ref().is_some_and(|path| path.is_file());
     let teamspeak = resolve_teamspeak_app(&configured);
-    Ok(vec![
+    let mut statuses = vec![
         platform(
             "perfectworld",
             "完美世界竞技平台",
@@ -1171,24 +1185,56 @@ fn list_software_statuses(state: State<AppState>) -> AppResult<Vec<SoftwareStatu
         SoftwareStatus {
             code: "steam".to_string(),
             name: "Steam".to_string(),
-            installed: steam_path(&state)
-                .ok()
-                .is_some_and(|path| path.join("steam.exe").is_file()),
-            executable_path: steam_path(&state)
-                .ok()
-                .map(|path| path.join("steam.exe").to_string_lossy().into_owned()),
+            installed: steam_installed,
+            executable_path: steam_exe
+                .as_ref()
+                .filter(|path| path.is_file())
+                .map(|path| path.to_string_lossy().into_owned()),
             download_mode: "managed".to_string(),
             official_url: crate::cdn::STEAM_SETUP_URL.to_string(),
+            installed_version: software::installed_display_version(
+                steam_exe.as_deref().filter(|path| path.is_file()),
+                &["steam"],
+            ),
+            available_version: None,
+            update_available: false,
         },
         SoftwareStatus {
             code: "teamspeak3".to_string(),
             name: "TeamSpeak 3".to_string(),
             installed: teamspeak.is_some(),
-            executable_path: teamspeak.map(|app| app.executable_path),
+            executable_path: teamspeak.as_ref().map(|app| app.executable_path.clone()),
             download_mode: "managed".to_string(),
             official_url: crate::cdn::TEAMSPEAK_CLIENT_URL.to_string(),
+            installed_version: software::installed_display_version(
+                teamspeak
+                    .as_ref()
+                    .map(|app| Path::new(&app.executable_path)),
+                &["teamspeak"],
+            ),
+            available_version: None,
+            update_available: false,
         },
-    ])
+    ];
+    if let Ok(packages) = software::cdn_packages() {
+        for status in &mut statuses {
+            let package = packages.get(&status.code);
+            status.available_version = package.and_then(|item| item.version.clone());
+            let stored = state
+                .db
+                .setting(&format!("cdn_package_sha256_{}", status.code))
+                .ok()
+                .flatten()
+                .and_then(|value| serde_json::from_str::<String>(&value).ok().or(Some(value)));
+            status.update_available = software::package_update_available(
+                status.installed,
+                status.installed_version.as_deref(),
+                package,
+                stored.as_deref(),
+            );
+        }
+    }
+    Ok(statuses)
 }
 
 #[tauri::command]
@@ -1214,10 +1260,11 @@ fn start_software_download(
         )
         .detail(software::FIVE_E_DOWNLOAD_PAGE));
     }
-    if !["perfectworld", "teamspeak3"].contains(&code.as_str()) {
+    if !["perfectworld", "teamspeak3", "steam"].contains(&code.as_str()) {
         return Err(AppError::new("SOFTWARE_NOT_SUPPORTED", "不支持该软件下载"));
     }
     let downloads = Arc::clone(&state.downloads);
+    let db = Arc::clone(&state.db);
     if downloads
         .lock()
         .get(&code)
@@ -1244,13 +1291,19 @@ fn start_software_download(
             let _ = app.emit("software-download-progress", &progress);
         });
         let final_progress = match result {
-            Ok(()) => DownloadProgress {
-                code: code.clone(),
-                state: "completed".to_string(),
-                downloaded: 0,
-                total: None,
-                message: Some("安装程序已结束，安装包已删除".to_string()),
-            },
+            Ok(sha256) => {
+                let _ = db.set_setting(
+                    &format!("cdn_package_sha256_{code}"),
+                    &serde_json::to_string(&sha256).unwrap_or_else(|_| format!("\"{sha256}\"")),
+                );
+                DownloadProgress {
+                    code: code.clone(),
+                    state: "completed".to_string(),
+                    downloaded: 0,
+                    total: None,
+                    message: Some("安装程序已结束，安装包已删除".to_string()),
+                }
+            }
             Err(error) => DownloadProgress {
                 code: code.clone(),
                 state: "failed".to_string(),

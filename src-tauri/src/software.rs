@@ -1,10 +1,16 @@
 //! Official software discovery and verified installer download workflows.
-use crate::cdn::{STEAM_SETUP_FILE, STEAM_SETUP_URL, TEAMSPEAK_CLIENT_FILE, TEAMSPEAK_CLIENT_URL};
+use crate::cdn::{
+    PACKAGES_URL, STEAM_SETUP_FILE, STEAM_SETUP_URL, TEAMSPEAK_CLIENT_FILE, TEAMSPEAK_CLIENT_URL,
+};
 use crate::error::{AppError, AppResult};
 use crate::models::DownloadProgress;
+use crate::version::version_is_newer;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use parking_lot::Mutex;
 use reqwest::blocking::Client;
-use sha2::{Digest, Sha512};
+use serde::Deserialize;
+use sha2::{Digest, Sha256, Sha512};
+use std::time::Instant;
 use std::{
     collections::HashSet,
     env,
@@ -22,6 +28,28 @@ pub const STEAM_DOWNLOAD_PAGE: &str = "https://store.steampowered.com/about/";
 const TEAMSPEAK_FOLDERS: &[&str] = &["TeamSpeak 3 Client", "TeamSpeak Client"];
 const TEAMSPEAK_EXECUTABLES: &[&str] = &["ts3client_win64.exe", "ts3client_win32.exe"];
 const REGISTRY_INSTALL_SCAN_DEPTH: usize = 3;
+const PACKAGES_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct CdnPackage {
+    pub id: Option<String>,
+    pub version: Option<String>,
+    pub url: Option<String>,
+    pub sha256: Option<String>,
+    pub size: Option<u64>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CdnPackageManifest {
+    packages: std::collections::HashMap<String, CdnPackage>,
+}
+
+static PACKAGES_CACHE: Mutex<Option<(Instant, std::collections::HashMap<String, CdnPackage>)>> =
+    Mutex::new(None);
 
 fn launch_official_with(
     url: &str,
@@ -156,6 +184,174 @@ fn cdn_spec(url: &str, file_name: &str) -> DownloadSpec {
     }
 }
 
+pub fn cdn_packages() -> AppResult<std::collections::HashMap<String, CdnPackage>> {
+    if let Some((fetched_at, cached)) = PACKAGES_CACHE.lock().as_ref() {
+        if fetched_at.elapsed() < PACKAGES_CACHE_TTL {
+            return Ok(cached.clone());
+        }
+    }
+    let manifest = client()?
+        .get(PACKAGES_URL)
+        .send()
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| {
+            AppError::new("PACKAGE_LIST_FAILED", "无法读取 CDN 软件清单").detail(error.to_string())
+        })?
+        .json::<CdnPackageManifest>()
+        .map_err(|error| {
+            AppError::new("PACKAGE_LIST_FAILED", "CDN 软件清单格式无效").detail(error.to_string())
+        })?;
+    *PACKAGES_CACHE.lock() = Some((Instant::now(), manifest.packages.clone()));
+    Ok(manifest.packages)
+}
+
+pub fn package_update_available(
+    installed: bool,
+    installed_version: Option<&str>,
+    package: Option<&CdnPackage>,
+    stored_sha256: Option<&str>,
+) -> bool {
+    let Some(package) = package else {
+        return false;
+    };
+    if !installed {
+        return false;
+    }
+    if let (Some(local), Some(remote)) = (installed_version, package.version.as_deref()) {
+        if version_is_newer(local, remote) {
+            return true;
+        }
+    }
+    match (stored_sha256, package.sha256.as_deref()) {
+        (Some(local), Some(remote)) => !local.eq_ignore_ascii_case(remote),
+        _ => false,
+    }
+}
+
+pub fn installed_display_version(path: Option<&Path>, name_hints: &[&str]) -> Option<String> {
+    if let Some(path) = path {
+        if let Some(version) = pe_file_version(path) {
+            return Some(version);
+        }
+    }
+    uninstall_display_version(name_hints)
+}
+
+#[cfg(windows)]
+fn pe_file_version(path: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+    };
+
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut handle = 0_u32;
+    let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), Some(&mut handle)) };
+    if size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0_u8; size as usize];
+    unsafe {
+        GetFileVersionInfoW(
+            PCWSTR(wide.as_ptr()),
+            Some(0),
+            size,
+            buffer.as_mut_ptr() as *mut _,
+        )
+        .ok()?
+    };
+    let mut info: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut length = 0_u32;
+    let query: Vec<u16> = "\\".encode_utf16().chain(std::iter::once(0)).collect();
+    let ok = unsafe {
+        VerQueryValueW(
+            buffer.as_ptr() as *const _,
+            PCWSTR(query.as_ptr()),
+            &mut info,
+            &mut length,
+        )
+        .as_bool()
+    };
+    if !ok || info.is_null() || (length as usize) < 20 {
+        return None;
+    }
+    let fields = unsafe { std::slice::from_raw_parts(info as *const u32, (length as usize) / 4) };
+    let ms = *fields.get(2)?;
+    let ls = *fields.get(3)?;
+    Some(format!(
+        "{}.{}.{}.{}",
+        ms >> 16,
+        ms & 0xffff,
+        ls >> 16,
+        ls & 0xffff
+    ))
+}
+
+#[cfg(not(windows))]
+fn pe_file_version(_path: &Path) -> Option<String> {
+    None
+}
+
+#[cfg(windows)]
+fn uninstall_display_version(name_hints: &[&str]) -> Option<String> {
+    use winreg::{enums::HKEY_CURRENT_USER, enums::HKEY_LOCAL_MACHINE, RegKey};
+
+    let roots = [
+        (
+            RegKey::predef(HKEY_CURRENT_USER),
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        ),
+    ];
+    for (root, key_path) in roots {
+        let Ok(uninstall) = root.open_subkey(key_path) else {
+            continue;
+        };
+        for subkey in uninstall.enum_keys().filter_map(Result::ok) {
+            let Ok(entry) = uninstall.open_subkey(&subkey) else {
+                continue;
+            };
+            let display_name = entry
+                .get_value::<String, _>("DisplayName")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if display_name.contains("steam account manager") {
+                continue;
+            }
+            if !name_hints
+                .iter()
+                .all(|hint| display_name.contains(&hint.to_ascii_lowercase()))
+            {
+                continue;
+            }
+            if let Ok(version) = entry.get_value::<String, _>("DisplayVersion") {
+                let trimmed = version.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn uninstall_display_version(_name_hints: &[&str]) -> Option<String> {
+    None
+}
+
 fn spec(code: &str, client: &Client) -> AppResult<DownloadSpec> {
     match code {
         "perfectworld" => perfect_spec(client),
@@ -174,7 +370,7 @@ pub fn download_and_install(
     code: &str,
     downloads_dir: &Path,
     mut progress: impl FnMut(DownloadProgress),
-) -> AppResult<()> {
+) -> AppResult<String> {
     fs::create_dir_all(downloads_dir)?;
     let client = client()?;
     let spec = spec(code, &client)?;
@@ -204,6 +400,7 @@ pub fn download_and_install(
     let mut buffer = vec![0_u8; 64 * 1024];
     let mut downloaded = 0_u64;
     let mut hasher = Sha512::new();
+    let mut sha256 = Sha256::new();
     loop {
         let count = response.read(&mut buffer).map_err(|error| {
             AppError::new("DOWNLOAD_FAILED", "读取官方安装包时失败").detail(error.to_string())
@@ -213,6 +410,7 @@ pub fn download_and_install(
         }
         file.write_all(&buffer[..count])?;
         hasher.update(&buffer[..count]);
+        sha256.update(&buffer[..count]);
         downloaded += count as u64;
         progress(DownloadProgress {
             code: code.to_string(),
@@ -261,7 +459,7 @@ pub fn download_and_install(
     result.map_err(|error| {
         AppError::new("INSTALLER_LAUNCH_FAILED", "无法运行官方安装程序").detail(error.to_string())
     })?;
-    Ok(())
+    Ok(format!("{:x}", sha256.finalize()))
 }
 
 fn allowlisted_teamspeak_executable(path: &Path) -> bool {
@@ -491,6 +689,37 @@ pub fn discover_teamspeak() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::io;
+
+    #[test]
+    fn flags_package_update_from_version_or_sha256() {
+        let package = CdnPackage {
+            id: Some("teamspeak3".into()),
+            version: Some("3.6.3".into()),
+            url: None,
+            sha256: Some("abc".into()),
+            size: None,
+            updated_at: None,
+        };
+        assert!(package_update_available(
+            true,
+            Some("3.6.2"),
+            Some(&package),
+            Some("abc"),
+        ));
+        assert!(package_update_available(
+            true,
+            Some("3.6.3"),
+            Some(&package),
+            Some("old"),
+        ));
+        assert!(!package_update_available(
+            true,
+            Some("3.6.3"),
+            Some(&package),
+            Some("abc"),
+        ));
+        assert!(!package_update_available(false, None, Some(&package), None));
+    }
 
     #[test]
     fn uses_cdn_installers_for_steam_and_teamspeak() {

@@ -61,6 +61,7 @@ import { useUi, type NoticeKind, type PlatformFilter } from "./store";
 export { SettingsPage } from "./pages/SettingsPage";
 
 export const ACCOUNT_REFRESH_INTERVAL_MS = 10_000;
+export const APP_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 type AccountScanKind = "startup" | "manual" | "silent";
 type AccountScanTask = { promise: Promise<void>; visible: boolean };
@@ -242,6 +243,10 @@ export default function App() {
 
   useEffect(() => {
     void checkForUpdate(false);
+    const timer = window.setInterval(() => {
+      void checkForUpdate(false);
+    }, APP_UPDATE_CHECK_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
   const filtered = useMemo(

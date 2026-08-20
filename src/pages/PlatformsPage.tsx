@@ -121,10 +121,12 @@ export function PlatformsPage({
         },
       ]),
     );
+    const backendSteam = byCode.get("steam");
     byCode.set("steam", {
       ...catalog.steam,
-      installed: Boolean(configuredSteam),
-      executablePath: configuredSteam || undefined,
+      ...backendSteam,
+      installed: Boolean(configuredSteam) || Boolean(backendSteam?.installed),
+      executablePath: configuredSteam || backendSteam?.executablePath,
     });
     const nextOrder = normalizePlatformOrder(settings.platform_order);
     const nextSoftware = nextOrder.map((code) => byCode.get(code) ?? catalog[code]);
@@ -316,6 +318,17 @@ export function PlatformsPage({
               <div className="software-info">
                 <h3>{item.name}</h3>
                 {item.executablePath && <p title={item.executablePath}>{item.executablePath}</p>}
+                {(item.installedVersion || item.availableVersion) && (
+                  <p>
+                    {item.installedVersion
+                      ? `本机 ${item.installedVersion}`
+                      : "本机版本未知"}
+                    {item.availableVersion ? ` · CDN ${item.availableVersion}` : ""}
+                  </p>
+                )}
+                {item.updateAvailable && (
+                  <p className="software-update-hint">有新版本</p>
+                )}
                 {task && task.state !== "completed" && (
                   <div className={`download-state ${task.state}`}>
                     {active && (
@@ -344,6 +357,16 @@ export function PlatformsPage({
                     选择路径
                   </button>
                 )}
+                {item.installed && item.updateAvailable && item.downloadMode === "managed" && (
+                  <button
+                    className="button secondary"
+                    disabled={Boolean(active)}
+                    onClick={() => void download(item)}
+                  >
+                    <Download />
+                    {active ? "处理中" : "更新软件"}
+                  </button>
+                )}
                 {item.installed ? (
                   <button
                     className="button primary"
@@ -358,19 +381,13 @@ export function PlatformsPage({
                   <button
                     className="button primary"
                     disabled={Boolean(active)}
-                    aria-label={
-                      item.code === "5e"
-                        ? "打开 5E 官网"
-                        : item.code === "steam"
-                          ? "打开 Steam 官网"
-                          : undefined
-                    }
+                    aria-label={item.code === "5e" ? "打开 5E 官网" : undefined}
                     onClick={() => void download(item)}
                   >
-                    {item.code === "5e" || item.code === "steam" ? <ExternalLink /> : <Download />}
+                    {item.code === "5e" ? <ExternalLink /> : <Download />}
                     {active
                       ? "处理中"
-                      : item.code === "5e" || item.code === "steam"
+                      : item.code === "5e"
                         ? "打开官网"
                         : "下载安装"}
                   </button>

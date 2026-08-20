@@ -1,6 +1,7 @@
 //! CDN-hosted application updates: check latest.json, download the installer, then restart.
 use crate::cdn::APP_LATEST_URL;
 use crate::error::{AppError, AppResult};
+use crate::version::version_is_newer;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -115,19 +116,6 @@ fn running_portable() -> bool {
     !current_exe
         .as_deref()
         .is_some_and(|path| executable_is_installed(path, installed_location().as_deref()))
-}
-
-fn parse_version(value: &str) -> [u64; 3] {
-    let mut parts = value.trim().trim_start_matches('v').split('.');
-    let mut out = [0; 3];
-    for slot in &mut out {
-        *slot = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
-    }
-    out
-}
-
-fn version_is_newer(current: &str, candidate: &str) -> bool {
-    parse_version(candidate) > parse_version(current)
 }
 
 struct InstallGuard<'a>(&'a AtomicBool);
@@ -331,12 +319,5 @@ mod tests {
             &location.join("steam-account-manager.exe"),
             None
         ));
-    }
-
-    #[test]
-    fn treats_higher_semver_as_newer() {
-        assert!(version_is_newer("0.11.7", "0.11.8"));
-        assert!(!version_is_newer("0.11.8", "0.11.8"));
-        assert!(!version_is_newer("0.12.0", "0.11.9"));
     }
 }

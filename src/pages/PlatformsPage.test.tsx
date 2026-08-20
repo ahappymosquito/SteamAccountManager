@@ -15,12 +15,12 @@ const mocks = vi.hoisted(() => ({
   discoverSteam: vi.fn(),
   setSteamPath: vi.fn(),
   openPath: vi.fn(),
+  startSoftwareDownload: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
   api: {
     ...mocks,
-    startSoftwareDownload: vi.fn(),
   },
 }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -233,6 +233,30 @@ describe("PlatformsPage", () => {
 
     await waitFor(() =>
       expect(notify).toHaveBeenCalledWith("success", "检测到 3 个已安装软件"),
+    );
+  });
+
+  it("offers a package update when the CDN copy is newer", async () => {
+    mocks.softwareStatuses.mockResolvedValue([
+      {
+        code: "teamspeak3",
+        name: "TeamSpeak 3",
+        installed: true,
+        executablePath:
+          "C:\\Program Files\\TeamSpeak 3 Client\\ts3client_win64.exe",
+        downloadMode: "managed",
+        officialUrl: "https://cdn.qrqto.club/teamspeak/TeamSpeak3-Client-win64.exe",
+        installedVersion: "3.6.1",
+        availableVersion: "3.6.2",
+        updateAvailable: true,
+      },
+    ]);
+    mocks.startSoftwareDownload.mockResolvedValue(undefined);
+    render(<PlatformsPage notify={vi.fn()} />);
+    expect(await screen.findByText("有新版本")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "更新软件" }));
+    await waitFor(() =>
+      expect(mocks.startSoftwareDownload).toHaveBeenCalledWith("teamspeak3"),
     );
   });
 });
