@@ -13,13 +13,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(os.environ.get("CDN_ROOT", "/var/www/cdn.qrqto.club"))
-USER_AGENT = "SteamAccountManagerCDN/0.11.9"
+USER_AGENT = "SteamAccountManagerCDN/0.11.11"
 SOURCES = {
     "steam": {
         "url": "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe",
         "dest": ROOT / "steam" / "SteamSetup.exe",
         "public": "https://cdn.qrqto.club/steam/SteamSetup.exe",
         "version_from": "date",
+    },
+    "webview2": {
+        "url": "https://go.microsoft.com/fwlink/?linkid=2124701",
+        "dest": ROOT / "webview2" / "MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+        "public": "https://cdn.qrqto.club/webview2/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+        "version": "evergreen-x64",
+        "timeout": 1800,
     },
     "teamspeak3": {
         "url": "https://files.teamspeak-services.com/releases/client/3.6.2/TeamSpeak3-Client-win64-3.6.2.exe",
@@ -44,11 +51,11 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download(url: str, dest: Path) -> bool:
+def download(url: str, dest: Path, timeout: int = 120) -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = response.read()
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
         print(f"keep {dest.name}: {error}")
@@ -71,7 +78,7 @@ def main() -> int:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     for package_id, source in SOURCES.items():
         dest = Path(source["dest"])
-        download(source["url"], dest)
+        download(source["url"], dest, timeout=int(source.get("timeout", 120)))
         if not dest.is_file() or dest.stat().st_size <= 0:
             continue
         version = source.get("version")

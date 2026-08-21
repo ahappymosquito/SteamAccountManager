@@ -2,6 +2,13 @@
 
 记录 Steam Account Manager 各版本面向用户的变更，与本地安装包、便携版放在同一目录。
 
+## 0.11.11 安装版检测并引导安装 WebView2
+
+- NSIS 安装版在复制文件前检测 Microsoft Edge WebView2 Runtime；缺失时提示并从 `cdn.qrqto.club` 下载独立安装包。
+- 用户取消、下载失败或安装后仍检测不到 Runtime 时中止安装，并打开 CDN 下载链接。
+- 便携版不检测、不提示；需本机已有 WebView2。
+- 关闭 Tauri 默认向 Microsoft 静默拉取引导程序，避免国内失败且无提示。
+
 ## 0.11.10 CFG 源码编辑与当前指令注释
 
 - CFG 工作台改为直接编辑文件，去掉可视化分区、滑块和准星预览。

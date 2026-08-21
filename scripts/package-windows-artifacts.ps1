@@ -25,11 +25,26 @@ if (-not (Test-Path -LiteralPath $installerScript -PathType Leaf)) {
 $installerScriptContent = Get-Content -Raw $installerScript
 foreach ($requiredInstallerText in @(
     "installer-hooks.nsh",
+    "NSIS_HOOK_PREINSTALL",
+    "!insertmacro NSIS_HOOK_PREINSTALL",
     "NSIS_HOOK_POSTINSTALL",
-    "!insertmacro NSIS_HOOK_POSTINSTALL"
+    "!insertmacro NSIS_HOOK_POSTINSTALL",
+    '!define INSTALLWEBVIEW2MODE ""'
 )) {
     if (-not $installerScriptContent.Contains($requiredInstallerText)) {
-        throw "Generated NSIS script is missing the shortcut refresh hook text: $requiredInstallerText"
+        throw "Generated NSIS script is missing the installer hook text: $requiredInstallerText"
+    }
+}
+
+$installerHooks = Join-Path $projectRoot "src-tauri\windows\installer-hooks.nsh"
+$installerHooksContent = Get-Content -Raw -LiteralPath $installerHooks
+foreach ($requiredHookText in @(
+    "NSIS_HOOK_PREINSTALL",
+    "https://cdn.qrqto.club/webview2/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+    "Abort"
+)) {
+    if (-not $installerHooksContent.Contains($requiredHookText)) {
+        throw "Installer hooks are missing the WebView2 CDN check text: $requiredHookText"
     }
 }
 if ($installerMatches.Count -ne 1) {

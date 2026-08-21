@@ -136,7 +136,7 @@ Tauri 2、Rust、React、TypeScript、Vite、SQLite、Tailwind 风格原生 CSS 
 ## 系统和开发环境
 
 - Windows 10 或 Windows 11 x64
-- Microsoft Edge WebView2 Runtime
+- Microsoft Edge WebView2 Runtime。安装版会检测缺失并提示从 `cdn.qrqto.club` 下载安装；便携版假定本机已有 Runtime
 - Node.js 20 或更高版本、npm 10 或更高版本
 - Rust stable，目标 `x86_64-pc-windows-msvc`
 - Visual Studio 2022 Build Tools，勾选“使用 C++ 的桌面开发”和 Windows SDK

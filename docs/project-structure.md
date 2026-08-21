@@ -44,7 +44,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 | `src-tauri/` | Tauri/Rust 桌面后端、SQLite、Steam/CS2/平台集成和 Windows 打包配置 |
 | `tests/fixtures/` | Steam `loginusers.vdf` 解析测试数据 |
 | `public/` | 应用图标及 Steam、5E、完美、TeamSpeak 平台品牌静态资源 |
-| `scripts/` | 图标校验与 Windows 双产物归档脚本 |
+| `scripts/` | 图标校验、CDN 刷新与 Windows 双产物归档脚本 |
 | `docs/` | 平台调研、配置资料和项目结构文档 |
 | `release/` | 本地交付的安装版、便携版与 [`CHANGELOG.md`](../release/CHANGELOG.md)；二进制不提交 Git，更新日志提交 |
 | `.codegraph/` | 每台机器独立生成的代码图数据库；仅提交忽略规则 |
@@ -160,6 +160,8 @@ SwitchDialog 确认
   → Database 写入 switch_logs
   → SwitchResult 返回前端
 ```
+
+NSIS 安装版在 `installer-hooks.nsh` 的 `NSIS_HOOK_PREINSTALL` 中检测 WebView2 Runtime；缺失则提示并从 `https://cdn.qrqto.club/webview2/MicrosoftEdgeWebView2RuntimeInstallerX64.exe` 下载独立安装包。便携版不走该钩子。`tauri.conf.json` 将 `webviewInstallMode` 设为 `skip`，避免安装向导再向 Microsoft 静默拉引导程序。
 
 启动扫描先同步账号再后台补齐头像。应用更新检查 `https://cdn.qrqto.club/app/latest.json`，运行中每 6 小时再查一次。平台安装包版本对照 `https://cdn.qrqto.club/packages.json`。Steam 切换成功后，前端通过 Tauri Channel 显示各切换阶段。默认「只切 Steam」不启动第三方平台。关闭开关后，5E 启动前最多等待 10 秒确认本机 `ActiveUser`；信号缺失时兼容启动，明确为其他账号时阻止启动。完美平台在 Steam 就绪后启动或重启。平台启动失败只产生警告，不回滚已完成的 Steam 切换。
 
