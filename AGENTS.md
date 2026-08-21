@@ -12,7 +12,8 @@
 
 ## GitHub 外部操作
 
-- 本地构建安装版和便携版属于默认交付步骤，不代表发布，不需要用户额外授权。
-- 只有用户当次明确要求发布时，才运行 `npm run package:release` 额外生成 `Steam-Account-Manager-<version>-windows-x64-portable.zip`。
-- 推送 GitHub、创建或推送 Git Tag、创建 GitHub Release、上传 Release 资产，都必须由用户当次明确要求；不得从“构建”“完成”或“供测试”等措辞推断授权。
-- `release/` 中的本地产物不自动提交到 Git，也不自动上传到任何远程服务。
+- 本地构建安装版和便携版属于默认交付步骤。CDN 上传随 `package:local` 进行。
+- **大更新自动推送并发布**，由代理判断时机，测试通过且 `release/` 产物齐全后再执行，无需当次再问。
+- 大更新：面向用户的功能、安装/运行时依赖、更新通道、可见行为变化。文档、协作规则、测试、注释等小改动不单独推送，可随下一次大更新一起推。
+- 发布动作：`git push origin main`、附注版本 Git Tag（`v<version>`）、GitHub Release、上传 NSIS 安装包和 `Steam-Account-Manager-<version>-windows-x64-portable.zip`。已有合格 `release/` 产物时，可直接打 zip，不必为发版再跑一遍完整构建。
+- `release/` 中的本地产物不提交到 Git。
