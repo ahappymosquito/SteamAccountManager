@@ -12,7 +12,12 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/ahappymosquito/SteamAccountManager/releases/latest) 下载最新的 Windows x64 NSIS 安装包。当前安装包未进行商业代码签名，Windows SmartScreen 可能显示未知发布者提示；请核对 Release 页面提供的文件来源后再运行。
+推荐从 CDN 获取 Windows x64 安装包：
+
+- 安装版：https://cdn.qrqto.club/app/Steam-Account-Manager-setup.exe
+- 便携版：https://cdn.qrqto.club/app/Steam-Account-Manager-portable.exe
+
+也可从 [GitHub Releases](https://github.com/ahappymosquito/SteamAccountManager/releases/latest) 下载。当前安装包未进行商业代码签名，Windows SmartScreen 可能显示未知发布者提示；请核对文件来源后再运行。
 
 本地构建时，安装版和便携版会复制到项目根目录的 [`release/`](release/)。
 
@@ -117,7 +122,7 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 
 ## 已知限制
 
-- 首版只支持 Windows x64 和 NSIS 安装包。
+- 当前只支持 Windows x64；交付物为 NSIS 安装包和便携版 EXE。
 - 第三方平台关联完全由用户手工录入，不读取其当前登录账号。
 - Steam 客户端未来更新可能改变注册表或 VDF 格式。
 - 应用无法保证 Steam 记住的登录状态仍被服务端接受。
@@ -174,16 +179,16 @@ cmd /c npm run package:local
 
 ## GitHub 自动发布
 
-main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。创建与应用版本一致的标签（例如 `v0.1.3`）并推送后，发布工作流会自动创建 GitHub Release 并上传安装包。
+main 分支和 Pull Request 会在 GitHub Windows Runner 上完成测试与 NSIS 构建，安装包作为 Actions Artifact 保留 14 天。推送与 `package.json` 版本一致的标签（例如 `v1.0.0`）后，发布工作流会补充 GitHub Release 资产。
 
-自动更新发布还需要在仓库的 Actions Secrets 中配置：
+应用内更新检查 `https://cdn.qrqto.club/app/latest.json`，不依赖 GitHub 下载安装包。若仍要在 Release 工作流中生成更新签名，需配置 Actions Secrets：
 
 - `TAURI_SIGNING_PRIVATE_KEY`：`%USERPROFILE%\.tauri\steam-account-manager-updater.key` 的完整内容。
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：`%USERPROFILE%\.tauri\steam-account-manager-updater.password.txt` 的完整内容。
 
-私钥和密码不得提交到 Git，必须离线备份。Release 工作流会生成并上传签名、`latest.json` 和 NSIS 更新资产；缺少任一 Secret 时会在构建发布包前停止。
+私钥和密码不得提交到 Git，必须离线备份。
 
 ```powershell
-git tag v0.1.3
-git push origin v0.1.3
+git tag v1.0.0
+git push origin v1.0.0
 ```

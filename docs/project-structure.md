@@ -68,9 +68,9 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 
 ### 组件
 
-- 账号域：`AccountDrawer`、`PlatformAccountDialog`、`AccountAvatar`、`AccountPlatformBadges`、`PlayerDataPanel`。平台编辑由独立弹窗负责，详情抽屉仅以可展开卡片展示平台资料和战绩。
+- 账号域：`AccountDrawer`、`PlatformAccountDialog`、`AccountAvatar`、`AccountPlatformBadges`、`PlayerDataPanel`、`TagFilter`。平台编辑由独立弹窗负责，详情抽屉仅以可展开卡片展示平台资料和战绩。
 - Steam 域：`CurrentSteamStatus`、`SteamLoginDialog`、`SwitchDialog`。
-- CFG 域：`TagFilter`。
+- CFG 域：CS2 页直接编辑源码，可复制准星命令，不再提供可视化预览。
 - 应用壳：`TitleBar`、`AppUpdateBanner`。
 
 ### 前端领域与边界

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(os.environ.get("CDN_ROOT", "/var/www/cdn.qrqto.club"))
-USER_AGENT = "SteamAccountManagerCDN/0.11.11"
+USER_AGENT = "SteamAccountManagerCDN/1.0.0"
 SOURCES = {
     "steam": {
         "url": "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe",

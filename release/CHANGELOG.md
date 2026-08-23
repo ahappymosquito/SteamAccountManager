@@ -2,6 +2,13 @@
 
 记录 Steam Account Manager 各版本面向用户的变更，与本地安装包、便携版放在同一目录。
 
+## 1.0.0 稳定版
+
+- 将账号切换、平台管理、CS2 CFG、CDN 更新和安装版 WebView2 引导整理为 1.0 稳定版。
+- 日常下载与应用内更新以 `cdn.qrqto.club` 为准，GitHub Release 同步提供安装包和便携 zip。
+- 安装版缺失 WebView2 时提示并从 CDN 安装；便携版需本机已有 Runtime。
+- 去掉已废弃的 CFG 准星预览组件。
+
 ## 0.11.11 安装版检测并引导安装 WebView2
 
 - NSIS 安装版在复制文件前检测 Microsoft Edge WebView2 Runtime；缺失时提示并从 `cdn.qrqto.club` 下载独立安装包。

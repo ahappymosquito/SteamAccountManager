@@ -24,6 +24,8 @@ mod tests {
     fn treats_higher_semver_as_newer() {
         assert!(version_is_newer("0.11.8", "0.11.9"));
         assert!(!version_is_newer("0.11.9", "0.11.9"));
+        assert!(version_is_newer("0.11.11", "1.0.0"));
+        assert!(!version_is_newer("1.0.0", "0.11.11"));
         assert!(!version_is_newer("3.6.2", "3.6.1"));
         assert!(version_is_newer("3.6.2", "3.6.2.1"));
     }
