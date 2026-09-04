@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Account, AccountCfgAssignment, CfgProfile, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, RestoreSelection, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchProgress, SwitchResult, TagOption, UpdateInfo, UpdateProgress } from "./types";
+import type { Account, AccountCfgAssignment, CfgCaptureResult, CfgProfile, CfgRuntimeAccountSummary, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, RestoreSelection, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchProgress, SwitchResult, TagOption, UpdateInfo, UpdateProgress } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -46,6 +46,10 @@ export const api = {
   deleteCfgProfile: (id:string) => invoke<void>("delete_cfg_profile",{id}),
   cfgAssignments: () => invoke<AccountCfgAssignment[]>("list_cfg_assignments"),
   assignCfgProfile: (steamAccountId:string,profileId?:string) => invoke<void>("assign_cfg_profile",{steamAccountId,profileId:profileId||null}),
+  captureRuntimeCfgs: (force=false) => invoke<CfgCaptureResult>("capture_runtime_cfgs",{force}),
+  runtimeCfgAccounts: () => invoke<CfgRuntimeAccountSummary[]>("list_runtime_cfg_accounts"),
+  openRuntimeCfgSnapshot: (id:string) => invoke<CfgProfile>("open_runtime_cfg_snapshot",{id}),
+  applyRuntimeCfgSnapshot: (id:string) => invoke<CfgProfile>("apply_runtime_cfg_snapshot",{id}),
   softwareStatuses: () => invoke<SoftwareStatus[]>("list_software_statuses"),
   downloadProgress: () => invoke<DownloadProgress[]>("list_download_progress"),
   openOfficialUrl: (code:string) => invoke<void>("open_official_url",{code}),

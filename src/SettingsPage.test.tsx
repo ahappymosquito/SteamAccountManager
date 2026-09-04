@@ -246,7 +246,7 @@ describe("SettingsPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/匹配 1 个本机账号/)).toBeInTheDocument();
     expect(screen.getByText(/忽略 1 个未匹配账号/)).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText(/CFG 方案与账号分配/));
+    fireEvent.click(screen.getByLabelText(/CFG 方案、账号分配与运行记录/));
     fireEvent.click(screen.getByRole("button", { name: "恢复所选资料" }));
     await waitFor(() =>
       expect(mocks.restoreBackupFile).toHaveBeenCalledWith(

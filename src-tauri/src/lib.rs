@@ -2,6 +2,7 @@
 mod app_update;
 mod cdn;
 mod cs2;
+mod cs2_runtime;
 mod database;
 mod error;
 mod models;
@@ -117,6 +118,7 @@ fn initialize_steam(state: State<AppState>) -> AppResult<StartupSteamResult> {
     )?;
     let scan_performed = true;
     let account_count = sync_local_accounts(&state, &path)?;
+    let _ = cs2_runtime::capture_runtime_cfgs(&state.db, &state.data_dir, &path, "scan", false);
     let platform_count = auto_configure_platforms(&state)?;
     Ok(StartupSteamResult {
         steam_path: Some(path.to_string_lossy().into_owned()),
@@ -142,7 +144,10 @@ fn set_steam_path(state: State<AppState>, path: String) -> AppResult<()> {
 }
 #[tauri::command]
 fn scan_accounts(state: State<AppState>) -> AppResult<usize> {
-    sync_local_accounts(&state, &steam_path(&state)?)
+    let path = steam_path(&state)?;
+    let count = sync_local_accounts(&state, &path)?;
+    let _ = cs2_runtime::capture_runtime_cfgs(&state.db, &state.data_dir, &path, "scan", false);
+    Ok(count)
 }
 #[tauri::command]
 fn refresh_steam_profile_media(state: State<AppState>, force: bool) -> AppResult<usize> {
@@ -633,6 +638,13 @@ impl SwitchWorkflowExecutor for LocalSwitchWorkflowExecutor<'_> {
     }
 
     fn prepare_cs2_config(&mut self) -> AppResult<()> {
+        let _ = cs2_runtime::capture_runtime_cfgs(
+            &self.state.db,
+            &self.state.data_dir,
+            self.steam_dir,
+            "switch",
+            true,
+        );
         cs2::prepare_for_switch(
             &self.state.db,
             &self.state.data_dir,
@@ -1102,6 +1114,40 @@ fn list_cfg_assignments(state: State<AppState>) -> AppResult<Vec<AccountCfgAssig
     state.db.list_cfg_assignments()
 }
 
+#[tauri::command]
+fn capture_runtime_cfgs(state: State<AppState>, force: bool) -> AppResult<CfgCaptureResult> {
+    cs2_runtime::capture_runtime_cfgs(
+        &state.db,
+        &state.data_dir,
+        &steam_path(&state)?,
+        if force { "manual" } else { "scan" },
+        force,
+    )
+}
+
+#[tauri::command]
+fn list_runtime_cfg_accounts(state: State<AppState>) -> AppResult<Vec<CfgRuntimeAccountSummary>> {
+    state.db.list_runtime_cfg_accounts()
+}
+
+#[tauri::command]
+fn list_runtime_cfg_snapshots(
+    state: State<AppState>,
+    steam_account_id: String,
+) -> AppResult<Vec<CfgRuntimeSnapshot>> {
+    state.db.list_runtime_cfg_snapshots(&steam_account_id)
+}
+
+#[tauri::command]
+fn open_runtime_cfg_snapshot(state: State<AppState>, id: String) -> AppResult<CfgProfile> {
+    cs2_runtime::open_runtime_snapshot(&state.db, &state.data_dir, &id)
+}
+
+#[tauri::command]
+fn apply_runtime_cfg_snapshot(state: State<AppState>, id: String) -> AppResult<CfgProfile> {
+    cs2_runtime::apply_runtime_snapshot(&state.db, &state.data_dir, &id)
+}
+
 fn resolve_teamspeak_app_with(
     configured: &[PlatformApp],
     discover: impl FnOnce() -> Option<PathBuf>,
@@ -1551,6 +1597,11 @@ pub fn run() {
             delete_cfg_profile,
             assign_cfg_profile,
             list_cfg_assignments,
+            capture_runtime_cfgs,
+            list_runtime_cfg_accounts,
+            list_runtime_cfg_snapshots,
+            open_runtime_cfg_snapshot,
+            apply_runtime_cfg_snapshot,
             list_software_statuses,
             list_download_progress,
             open_official_url,

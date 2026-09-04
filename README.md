@@ -99,6 +99,7 @@ Steam Account Manager 是一个面向 Windows 10/11 x64 的本地 Steam 多账�
 
 - `steam-account-manager.db`：SQLite 账号资料、设置和切换日志
 - `cfg-library\`：应用管理的简洁 CFG 主文件
+- `cfg-runtime\`：各账号已运行 CS2 配置的采集副本（按内容哈希归档）
 - `downloads\`：平台官方安装包临时目录；安装向导退出后自动删除安装包
 - `backups\`：修改前的 VDF 与元数据备份，默认保留最近 10 次；`import-before-restore\` 保存软件资料恢复前的内部 JSON 快照
 - `avatars\`：应用专属头像与头像框缓存

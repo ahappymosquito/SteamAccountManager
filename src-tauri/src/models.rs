@@ -296,6 +296,10 @@ pub struct Cs2Config {
     pub file_count: usize,
 }
 
+fn manual_cfg_source() -> String {
+    "manual".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CfgProfile {
@@ -305,6 +309,65 @@ pub struct CfgProfile {
     pub content: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default = "manual_cfg_source")]
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CfgRuntimeFileMeta {
+    pub name: String,
+    pub size: u64,
+    pub modified_at: Option<String>,
+    pub sha256: String,
+    pub kind: String,
+    pub included: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CfgRuntimeAccountSummary {
+    pub steam_account_id: String,
+    pub steam_id64: String,
+    pub persona_name: Option<String>,
+    pub account_name: Option<String>,
+    pub snapshot_id: String,
+    pub captured_at: String,
+    pub last_seen_at: String,
+    pub trigger: String,
+    pub source_path: String,
+    pub content_hash: String,
+    pub file_count: i64,
+    pub files: Vec<CfgRuntimeFileMeta>,
+    pub history_count: i64,
+    pub profile_id: Option<String>,
+    pub profile_name: Option<String>,
+    pub profile_file_name: Option<String>,
+    pub profile_dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CfgRuntimeSnapshot {
+    pub id: String,
+    pub steam_account_id: String,
+    pub captured_at: String,
+    pub last_seen_at: String,
+    pub trigger: String,
+    pub source_path: String,
+    pub content_hash: String,
+    pub file_count: i64,
+    pub files: Vec<CfgRuntimeFileMeta>,
+    pub cfg_content: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CfgCaptureResult {
+    pub captured: usize,
+    pub unchanged: usize,
+    pub skipped_running: bool,
+    pub accounts: Vec<CfgRuntimeAccountSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

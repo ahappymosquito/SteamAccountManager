@@ -34,6 +34,10 @@ const apiMock = vi.hoisted(() => ({
   exportCfgProfile: vi.fn(),
   settings: vi.fn(),
   setSetting: vi.fn(),
+  captureRuntimeCfgs: vi.fn(),
+  runtimeCfgAccounts: vi.fn(),
+  openRuntimeCfgSnapshot: vi.fn(),
+  applyRuntimeCfgSnapshot: vi.fn(),
 }));
 const dialogMock = vi.hoisted(() => ({
   open: vi.fn(),
@@ -68,6 +72,13 @@ describe("Cs2Page", () => {
     apiMock.exportCfgProfile.mockResolvedValue("C:\\exports\\autoexec.cfg");
     apiMock.settings.mockResolvedValue({});
     apiMock.setSetting.mockResolvedValue(undefined);
+    apiMock.captureRuntimeCfgs.mockResolvedValue({
+      captured: 0,
+      unchanged: 0,
+      skippedRunning: false,
+      accounts: [],
+    });
+    apiMock.runtimeCfgAccounts.mockResolvedValue([]);
     clipboardMock.writeText.mockResolvedValue(undefined);
   });
 
@@ -167,7 +178,7 @@ describe("Cs2Page", () => {
     await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
     expect(
       screen.getByText(
-        "直接编辑 CFG 文件，修改会自动保存；不会写入游戏实时文件，也不会启动游戏。",
+        "切号、扫描和打开本页时会自动采集各账号已运行过的 CS2 配置并留下记录。编辑仍只改本应用方案，不会写入游戏实时文件，也不会启动游戏。",
       ),
     ).toBeInTheDocument();
     expect(container.querySelector(".editor-file-name")).not.toBeInTheDocument();
@@ -211,5 +222,51 @@ describe("Cs2Page", () => {
     render(<Cs2Page notify={vi.fn()} />);
     await screen.findByRole("option", { name: "主配置 · autoexec.cfg" });
     expect(screen.getByRole("button", { name: "删除 CFG" })).toBeDisabled();
+  });
+
+  it("lists captured runtime configs and opens the linked profile", async () => {
+    const runtimeProfile = {
+      ...profile,
+      id: "cfg-runtime",
+      name: "运行 · 主力",
+      fileName: "runtime-39734272.cfg",
+      source: "runtime",
+    };
+    apiMock.captureRuntimeCfgs.mockResolvedValue({
+      captured: 1,
+      unchanged: 0,
+      skippedRunning: false,
+      accounts: [
+        {
+          steamAccountId: "acc-1",
+          steamId64: "76561198000000000",
+          personaName: "主力",
+          snapshotId: "snap-1",
+          capturedAt: "2026-09-04T10:00:00Z",
+          lastSeenAt: "2026-09-04T10:00:00Z",
+          trigger: "scan",
+          sourcePath: "C:\\Steam\\userdata\\39734272\\730\\local\\cfg",
+          contentHash: "abc",
+          fileCount: 2,
+          files: [],
+          historyCount: 1,
+          profileId: "cfg-runtime",
+          profileName: "运行 · 主力",
+          profileFileName: "runtime-39734272.cfg",
+          profileDirty: false,
+        },
+      ],
+    });
+    apiMock.openRuntimeCfgSnapshot.mockResolvedValue(runtimeProfile);
+    apiMock.cfgProfiles.mockResolvedValue([profile, runtimeProfile]);
+    apiMock.setActiveCfgProfile.mockResolvedValue(runtimeProfile);
+    const notify = vi.fn();
+    render(<Cs2Page notify={notify} />);
+    await screen.findByRole("button", { name: "主力" });
+    fireEvent.click(screen.getByRole("button", { name: "主力" }));
+    await waitFor(() =>
+      expect(apiMock.openRuntimeCfgSnapshot).toHaveBeenCalledWith("snap-1"),
+    );
+    expect(notify).toHaveBeenCalledWith("success", "已打开 主力 的运行配置");
   });
 });

@@ -6,6 +6,7 @@ import {
   Copy,
   Download,
   FolderOpen,
+  FolderSync,
   Pencil,
   Plus,
   RefreshCw,
@@ -19,7 +20,7 @@ import {
 } from "../lib/cfgDocument";
 import { cfgCrosshairCommands } from "../lib/crosshair";
 import { api } from "../lib/api";
-import type { AppError, CfgProfile } from "../lib/types";
+import type { AppError, CfgProfile, CfgRuntimeAccountSummary } from "../lib/types";
 
 const errorMessage = (error: unknown) =>
   (error as AppError)?.message || "操作失败";
@@ -28,6 +29,19 @@ const withTemplateIfEmpty = (profile: CfgProfile): CfgProfile =>
   profile.content.trim()
     ? profile
     : { ...profile, content: defaultCfgTemplate() };
+
+const formatCaptureTime = (value?: string) =>
+  value
+    ? new Intl.DateTimeFormat("zh-CN", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date(value))
+    : "从未";
+
+const runtimeAccountLabel = (item: CfgRuntimeAccountSummary) =>
+  item.personaName || item.accountName || "未命名账号";
 
 export function Cs2Page({
   notify,
@@ -39,6 +53,11 @@ export function Cs2Page({
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
+  const [runtimeAccounts, setRuntimeAccounts] = useState<
+    CfgRuntimeAccountSummary[]
+  >([]);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [runtimeSkipped, setRuntimeSkipped] = useState(false);
   const gutterRef = useRef<HTMLPreElement>(null);
   const draft = workspace.draft;
   const dirty = workspace.isDirty();
@@ -62,10 +81,34 @@ export function Cs2Page({
     loadProfile(active);
   };
 
+  const refreshRuntime = async (force = false) => {
+    setRuntimeBusy(true);
+    try {
+      const result = await api.captureRuntimeCfgs(force);
+      setRuntimeAccounts(result.accounts);
+      setRuntimeSkipped(result.skippedRunning);
+      if (!force) return;
+      if (result.skippedRunning) {
+        notify("error", "CS2 正在运行，退出后再同步以免读到不完整文件");
+      } else if (result.captured > 0) {
+        notify("success", `已记录 ${result.captured} 个账号的运行配置`);
+      } else {
+        notify("success", "运行配置没有新变化");
+      }
+    } catch (error) {
+      const accounts = await api.runtimeCfgAccounts().catch(() => []);
+      setRuntimeAccounts(accounts);
+      if (force) notify("error", errorMessage(error));
+    } finally {
+      setRuntimeBusy(false);
+    }
+  };
+
   useEffect(() => {
     void refreshProfiles().catch((error) =>
       notify("error", errorMessage(error)),
     );
+    void refreshRuntime(false);
   }, []);
 
   useEffect(() => {
@@ -193,6 +236,37 @@ export function Cs2Page({
     setRenaming(false);
   };
 
+  const openRuntime = async (item: CfgRuntimeAccountSummary) => {
+    try {
+      await flushCfgDraft();
+      const profile = await api.openRuntimeCfgSnapshot(item.snapshotId);
+      setProfiles(await api.cfgProfiles());
+      loadProfile(profile);
+      notify("success", `已打开 ${runtimeAccountLabel(item)} 的运行配置`);
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
+  const applyRuntime = async (item: CfgRuntimeAccountSummary) => {
+    if (
+      !confirm(
+        `用 ${runtimeAccountLabel(item)} 最新运行配置覆盖当前方案？手动修改会被替换。`,
+      )
+    )
+      return;
+    try {
+      await flushCfgDraft();
+      const profile = await api.applyRuntimeCfgSnapshot(item.snapshotId);
+      setProfiles(await api.cfgProfiles());
+      loadProfile(profile);
+      setRuntimeAccounts(await api.runtimeCfgAccounts());
+      notify("success", "已按最新运行配置恢复方案");
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
+
   const copyCrosshair = async () => {
     const value = cfgCrosshairCommands(document);
     if (!value) {
@@ -226,10 +300,61 @@ export function Cs2Page({
         <div>
           <h1>CS2 CFG 工作台</h1>
           <p>
-            直接编辑 CFG 文件，修改会自动保存；不会写入游戏实时文件，也不会启动游戏。
+            切号、扫描和打开本页时会自动采集各账号已运行过的 CS2 配置并留下记录。编辑仍只改本应用方案，不会写入游戏实时文件，也不会启动游戏。
           </p>
         </div>
       </header>
+
+      <section className="cfg-runtime-bar" aria-label="本机运行配置">
+        <div className="cfg-runtime-meta">
+          <strong>本机运行配置</strong>
+          <span>
+            {runtimeBusy
+              ? "正在同步…"
+              : runtimeAccounts.length
+                ? `${runtimeAccounts.length} 个账号已记录`
+                : "尚未在本机发现，先用任意账号启动并退出一次 CS2"}
+          </span>
+          {runtimeSkipped ? <span>CS2 运行中，已跳过自动采集</span> : null}
+        </div>
+        <button
+          className="button secondary"
+          disabled={runtimeBusy}
+          onClick={() => void refreshRuntime(true)}
+        >
+          <FolderSync />
+          <span>立即同步</span>
+        </button>
+        {runtimeAccounts.length > 0 ? (
+          <ul>
+            {runtimeAccounts.map((item) => (
+              <li key={item.steamAccountId}>
+                <button
+                  className="cfg-runtime-open"
+                  onClick={() => void openRuntime(item)}
+                >
+                  {runtimeAccountLabel(item)}
+                </button>
+                <small>
+                  {formatCaptureTime(item.lastSeenAt)} · {item.fileCount} 个文件
+                  {item.historyCount > 1 ? ` · ${item.historyCount} 次记录` : ""}
+                </small>
+                {item.profileDirty ? (
+                  <>
+                    <span className="cfg-runtime-dirty">已改方案</span>
+                    <button
+                      className="button secondary"
+                      onClick={() => void applyRuntime(item)}
+                    >
+                      按运行配置恢复
+                    </button>
+                  </>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
 
       <div className="cfg-commandbar">
         <div className="cfg-profile-control">

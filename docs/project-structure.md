@@ -60,7 +60,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 
 ### 页面
 
-- `pages/Cs2Page.tsx`：CFG 方案文件管理、源码编辑、注释刷新与导入导出。
+- `pages/Cs2Page.tsx`：CFG 方案文件管理、源码编辑、注释刷新、导入导出，以及本机运行配置记录。
 - `pages/PlatformsPage.tsx`：统一管理 Steam、5E、完美和 TeamSpeak 3 的发现、下载、路径配置、启动与可持久化拖拽顺序。
 - `pages/SettingsPage.tsx`：切换超时、默认折叠的平台凭据、统一数据导入导出与备份恢复。版本与更新入口在左侧栏底部。
 - 软件备份导出保持全量；恢复命令接收分类选择，并在数据库层按 SteamID64 将账号资料映射到本机当前可用账号。
@@ -101,6 +101,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 | `steam/profile_media.rs` | 从公开 Steam 社区资料发现动态头像与头像框，校验 Steam 静态资源域名并原样缓存 |
 | `steam/vdf.rs` | Valve VDF 解析 |
 | `cs2.rs` | CS2 安装发现、CFG 方案文件、部署与校验 |
+| `cs2_runtime.rs` | 采集 userdata 中已运行的 CS2 配置、转换为 CFG 并保留记录 |
 | `player_query.rs` | 5E/完美世界玩家数据请求、重试、定级与赛季排名解析和稳定错误映射 |
 | `software.rs` | 平台软件下载、进度、路径验证和启动 |
 | `app_update.rs` | Tauri Updater 检查、下载进度与安装 |
@@ -168,13 +169,17 @@ NSIS 安装版在 `installer-hooks.nsh` 的 `NSIS_HOOK_PREINSTALL` 中检测 Web
 ### CFG 编辑与切换部署
 
 ```text
+Cs2Page / initialize_steam / scan_accounts / switch
+  → cs2_runtime.capture_runtime_cfgs()
+  → 读取 userdata/<id>/730/local/cfg
+  → 转换为 CFG 方案并写入 cfg_runtime_snapshots
 Cs2Page
   → cfgDocument/crosshair 纯前端解析与编辑
   → useCfgWorkspace 草稿
   → api.saveCfgProfile()
   → Database + managed CFG 文件
   → 账号切换时 LocalSwitchWorkflowExecutor.prepare_cs2_config()
-  → 将账号绑定方案部署到 CS2
+  → 先采集运行配置，再将当前方案部署到 CS2
 ```
 
 ### 玩家平台数据

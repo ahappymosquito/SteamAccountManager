@@ -592,7 +592,7 @@ export function SettingsPage({
                     }
                   />
                   <span>
-                    <strong>CFG 方案与账号分配</strong>
+                    <strong>CFG 方案、账号分配与运行记录</strong>
                     <small>{restoreCandidate.preview.cfgProfileCount} 个 CFG 方案</small>
                   </span>
                 </label>

@@ -1,4 +1,4 @@
-//! Managed CS2 cfg profiles and safe switch-time deployment.
+//! 管理 CS2 CFG 方案文件，并在切号时安全部署到游戏目录。运行配置采集见 `cs2_runtime`。
 use crate::database::Database;
 use crate::error::{AppError, AppResult};
 use crate::models::CfgProfile;
@@ -209,7 +209,16 @@ pub fn is_installed(steam_dir: &Path) -> bool {
     cs2_cfg_directory(steam_dir).is_ok()
 }
 
-fn account_id32(steam_id64: &str) -> AppResult<u64> {
+pub fn userdata_cfg_directory(steam_dir: &Path, steam_id64: &str) -> AppResult<PathBuf> {
+    Ok(steam_dir
+        .join("userdata")
+        .join(account_id32(steam_id64)?.to_string())
+        .join("730")
+        .join("local")
+        .join("cfg"))
+}
+
+pub(crate) fn account_id32(steam_id64: &str) -> AppResult<u64> {
     let id = steam_id64
         .parse::<u64>()
         .map_err(|_| AppError::new("INVALID_STEAM_ID", "SteamID64 无效"))?;
@@ -219,6 +228,13 @@ fn account_id32(steam_id64: &str) -> AppResult<u64> {
 
 fn sha256(path: &Path) -> AppResult<Vec<u8>> {
     Ok(Sha256::digest(fs::read(path)?).to_vec())
+}
+
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 pub fn prepare_for_switch(

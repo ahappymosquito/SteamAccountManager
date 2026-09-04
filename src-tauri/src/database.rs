@@ -1,8 +1,9 @@
 //! SQLite migrations and transactional repositories for application data.
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    Account, AccountCfgAssignment, CfgProfile, LocalSteamAccount, PlatformApp, PlatformLink,
-    PlatformLinkInput, PlatformSummary, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption,
+    Account, AccountCfgAssignment, CfgProfile, CfgRuntimeAccountSummary, CfgRuntimeFileMeta,
+    CfgRuntimeSnapshot, LocalSteamAccount, PlatformApp, PlatformLink, PlatformLinkInput,
+    PlatformSummary, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -18,7 +19,17 @@ use uuid::Uuid;
 
 pub struct Database(pub Mutex<Connection>);
 
-const BACKUP_TABLES: [&str; 12] = [
+pub struct RuntimeSnapshotInput<'a> {
+    pub steam_account_id: &'a str,
+    pub trigger: &'a str,
+    pub source_path: &'a str,
+    pub content_hash: &'a str,
+    pub file_count: i64,
+    pub files_json: &'a str,
+    pub cfg_content: &'a str,
+}
+
+const BACKUP_TABLES: [&str; 14] = [
     "steam_accounts",
     "account_profiles",
     "tags",
@@ -31,7 +42,21 @@ const BACKUP_TABLES: [&str; 12] = [
     "cfg_profile_versions",
     "account_cfg_profiles",
     "account_cfg_deployments",
+    "cfg_runtime_snapshots",
+    "cfg_runtime_profiles",
 ];
+
+fn is_optional_backup_table(table: &str) -> bool {
+    matches!(table, "cfg_runtime_snapshots" | "cfg_runtime_profiles")
+}
+
+fn backup_table_rows<'a>(tables: &'a Map<String, Value>, table: &str) -> &'a [Value] {
+    tables
+        .get(table)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> AppResult<bool> {
     let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -61,7 +86,12 @@ fn cfg_profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CfgProfile>
         content: row.get(3)?,
         created_at: row.get(4)?,
         updated_at: row.get(5)?,
+        source: "manual".into(),
     })
+}
+
+fn parse_runtime_files(files_json: &str) -> Vec<CfgRuntimeFileMeta> {
+    serde_json::from_str(files_json).unwrap_or_default()
 }
 
 fn table_columns(conn: &Connection, table: &str) -> AppResult<Vec<String>> {
@@ -160,11 +190,15 @@ fn backup_tables(document: &Value) -> AppResult<&Map<String, Value>> {
         .and_then(Value::as_object)
         .ok_or_else(|| AppError::new("BACKUP_INVALID", "备份文件缺少 tables 对象"))?;
     for table in BACKUP_TABLES {
-        if !tables.get(table).is_some_and(Value::is_array) {
-            return Err(AppError::new(
-                "BACKUP_INVALID",
-                format!("备份文件缺少 {table} 数据"),
-            ));
+        match tables.get(table) {
+            Some(value) if value.is_array() => {}
+            None if is_optional_backup_table(table) => {}
+            _ => {
+                return Err(AppError::new(
+                    "BACKUP_INVALID",
+                    format!("备份文件缺少 {table} 数据"),
+                ));
+            }
         }
     }
     Ok(tables)
@@ -356,9 +390,7 @@ impl Database {
             .collect();
         let matched_local: HashSet<String> = account_mapping.values().cloned().collect();
         let remap_account_rows = |table: &str| {
-            imported[table]
-                .as_array()
-                .expect("validated table")
+            backup_table_rows(imported, table)
                 .iter()
                 .filter_map(|row| {
                     let mut row = row.as_object()?.clone();
@@ -519,7 +551,10 @@ impl Database {
 
         if selection.cfg {
             for table in ["cfg_profiles", "cfg_profile_versions"] {
-                current.insert(table.into(), imported[table].clone());
+                current.insert(
+                    table.into(),
+                    Value::Array(backup_table_rows(imported, table).to_vec()),
+                );
             }
             current.insert(
                 "account_cfg_profiles".into(),
@@ -528,6 +563,27 @@ impl Database {
             current.insert(
                 "account_cfg_deployments".into(),
                 Value::Array(remap_account_rows("account_cfg_deployments")),
+            );
+            current.insert(
+                "cfg_runtime_snapshots".into(),
+                Value::Array(remap_account_rows("cfg_runtime_snapshots")),
+            );
+            let profile_ids: HashSet<String> = backup_table_rows(imported, "cfg_profiles")
+                .iter()
+                .filter_map(|row| row.get("id")?.as_str().map(str::to_string))
+                .collect();
+            current.insert(
+                "cfg_runtime_profiles".into(),
+                Value::Array(
+                    remap_account_rows("cfg_runtime_profiles")
+                        .into_iter()
+                        .filter(|row| {
+                            row.get("profile_id")
+                                .and_then(Value::as_str)
+                                .is_some_and(|id| profile_ids.contains(id))
+                        })
+                        .collect(),
+                ),
             );
         }
         if selection.settings {
@@ -551,6 +607,8 @@ impl Database {
         tx.execute_batch(
             "DELETE FROM switch_logs;
              DELETE FROM player_snapshot_cache;
+             DELETE FROM cfg_runtime_profiles;
+             DELETE FROM cfg_runtime_snapshots;
              DELETE FROM account_cfg_deployments;
              DELETE FROM account_cfg_profiles;
              DELETE FROM cfg_profile_versions;
@@ -565,11 +623,12 @@ impl Database {
              DELETE FROM app_settings WHERE key NOT LIKE 'credential.%';",
         )?;
         for (table, allowed_columns) in columns {
-            let records = tables
-                .get(table)
-                .and_then(Value::as_array)
-                .expect("validated backup table");
-            insert_backup_table(&tx, table, &allowed_columns, records)?;
+            insert_backup_table(
+                &tx,
+                table,
+                &allowed_columns,
+                backup_table_rows(tables, table),
+            )?;
         }
         tx.commit()?;
         drop(conn);
@@ -1047,7 +1106,7 @@ impl Database {
     pub fn list_cfg_profiles(&self) -> AppResult<Vec<CfgProfile>> {
         let conn = self.0.lock();
         let mut statement = conn.prepare(
-            "SELECT id,name,file_name,content,created_at,updated_at FROM cfg_profiles ORDER BY name COLLATE NOCASE",
+            "SELECT p.id,p.name,p.file_name,p.content,p.created_at,p.updated_at,CASE WHEN r.profile_id IS NOT NULL THEN 'runtime' ELSE 'manual' END FROM cfg_profiles p LEFT JOIN cfg_runtime_profiles r ON r.profile_id=p.id ORDER BY p.name COLLATE NOCASE",
         )?;
         let profiles = statement
             .query_map([], |row| {
@@ -1058,6 +1117,10 @@ impl Database {
                     content: row.get(3)?,
                     created_at: row.get(4)?,
                     updated_at: row.get(5)?,
+                    source: row
+                        .get::<_, Option<String>>(6)?
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| "manual".into()),
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -1117,6 +1180,7 @@ impl Database {
                 content: include_str!("../../src/lib/cs2-autoexec.template.cfg").to_string(),
                 created_at: now.clone(),
                 updated_at: now,
+                source: "manual".into(),
             };
             tx.execute(
                 "INSERT INTO cfg_profiles(id,name,file_name,content,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",
@@ -1178,6 +1242,7 @@ impl Database {
             content: content.to_string(),
             created_at: now.clone(),
             updated_at: now,
+            source: "manual".into(),
         })
     }
 
@@ -1326,6 +1391,264 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()?)
+    }
+
+    pub fn cfg_assignment_profile_id(&self, steam_account_id: &str) -> AppResult<Option<String>> {
+        Ok(self
+            .0
+            .lock()
+            .query_row(
+                "SELECT profile_id FROM account_cfg_profiles WHERE steam_account_id=?1",
+                [steam_account_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn record_runtime_snapshot(
+        &self,
+        input: &RuntimeSnapshotInput<'_>,
+    ) -> AppResult<(String, bool)> {
+        let conn = self.0.lock();
+        let now = Utc::now().to_rfc3339();
+        if let Some(id) = conn
+            .query_row(
+                "SELECT id FROM cfg_runtime_snapshots WHERE steam_account_id=?1 AND content_hash=?2",
+                params![input.steam_account_id, input.content_hash],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            conn.execute(
+                "UPDATE cfg_runtime_snapshots SET last_seen_at=?1,trigger=?2,source_path=?3 WHERE id=?4",
+                params![now, input.trigger, input.source_path, id],
+            )?;
+            return Ok((id, false));
+        }
+        let id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO cfg_runtime_snapshots(id,steam_account_id,captured_at,last_seen_at,trigger,source_path,content_hash,file_count,files_json,cfg_content) VALUES(?1,?2,?3,?3,?4,?5,?6,?7,?8,?9)",
+            params![id, input.steam_account_id, now, input.trigger, input.source_path, input.content_hash, input.file_count, input.files_json, input.cfg_content],
+        )?;
+        Ok((id, true))
+    }
+
+    pub fn latest_runtime_snapshot_seen_at(
+        &self,
+        steam_account_id: &str,
+    ) -> AppResult<Option<String>> {
+        Ok(self
+            .0
+            .lock()
+            .query_row(
+                "SELECT last_seen_at FROM cfg_runtime_snapshots WHERE steam_account_id=?1 ORDER BY last_seen_at DESC LIMIT 1",
+                [steam_account_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn runtime_synced_cfg_content(
+        &self,
+        steam_account_id: &str,
+        content_hash: &str,
+    ) -> AppResult<Option<String>> {
+        Ok(self
+            .0
+            .lock()
+            .query_row(
+                "SELECT cfg_content FROM cfg_runtime_snapshots WHERE steam_account_id=?1 AND content_hash=?2",
+                params![steam_account_id, content_hash],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn runtime_profile_state(
+        &self,
+        steam_account_id: &str,
+    ) -> AppResult<Option<(CfgProfile, String)>> {
+        let conn = self.0.lock();
+        Ok(conn
+            .query_row(
+                "SELECT p.id,p.name,p.file_name,p.content,p.created_at,p.updated_at,r.last_synced_hash FROM cfg_runtime_profiles r JOIN cfg_profiles p ON p.id=r.profile_id WHERE r.steam_account_id=?1",
+                [steam_account_id],
+                |row| {
+                    Ok((
+                        CfgProfile {
+                            id: row.get(0)?,
+                            name: row.get(1)?,
+                            file_name: row.get(2)?,
+                            content: row.get(3)?,
+                            created_at: row.get(4)?,
+                            updated_at: row.get(5)?,
+                            source: "runtime".into(),
+                        },
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn link_runtime_profile(
+        &self,
+        steam_account_id: &str,
+        profile_id: &str,
+        content_hash: &str,
+    ) -> AppResult<()> {
+        self.0.lock().execute(
+            "INSERT INTO cfg_runtime_profiles(steam_account_id,profile_id,last_synced_hash,last_synced_at) VALUES(?1,?2,?3,?4) ON CONFLICT(steam_account_id) DO UPDATE SET profile_id=excluded.profile_id,last_synced_hash=excluded.last_synced_hash,last_synced_at=excluded.last_synced_at",
+            params![steam_account_id, profile_id, content_hash, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn prune_runtime_snapshots(
+        &self,
+        steam_account_id: &str,
+        keep: usize,
+    ) -> AppResult<Vec<String>> {
+        let conn = self.0.lock();
+        let keep_hash: Option<String> = conn
+            .query_row(
+                "SELECT last_synced_hash FROM cfg_runtime_profiles WHERE steam_account_id=?1",
+                [steam_account_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let mut statement = conn.prepare(
+            "SELECT id,content_hash FROM cfg_runtime_snapshots WHERE steam_account_id=?1 ORDER BY last_seen_at DESC, captured_at DESC",
+        )?;
+        let rows = statement
+            .query_map([steam_account_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut retain = HashSet::new();
+        for (index, (id, hash)) in rows.iter().enumerate() {
+            if index < keep || keep_hash.as_deref() == Some(hash.as_str()) {
+                retain.insert(id.clone());
+            }
+        }
+        let removed_ids = rows
+            .iter()
+            .filter(|(id, _)| !retain.contains(id))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        if !removed_ids.is_empty() {
+            let placeholders = removed_ids
+                .iter()
+                .enumerate()
+                .map(|(index, _)| format!("?{}", index + 1))
+                .collect::<Vec<_>>()
+                .join(",");
+            conn.execute(
+                &format!("DELETE FROM cfg_runtime_snapshots WHERE id IN ({placeholders})"),
+                params_from_iter(removed_ids.iter()),
+            )?;
+        }
+        let remaining: HashSet<String> = conn
+            .prepare("SELECT content_hash FROM cfg_runtime_snapshots WHERE steam_account_id=?1")?
+            .query_map([steam_account_id], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|(_, hash)| hash)
+            .filter(|hash| !remaining.contains(hash))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect())
+    }
+
+    pub fn runtime_snapshot_by_id(&self, id: &str) -> AppResult<CfgRuntimeSnapshot> {
+        self.0
+            .lock()
+            .query_row(
+                "SELECT id,steam_account_id,captured_at,last_seen_at,trigger,source_path,content_hash,file_count,files_json,cfg_content FROM cfg_runtime_snapshots WHERE id=?1",
+                [id],
+                |row| {
+                    let files_json: String = row.get(8)?;
+                    Ok(CfgRuntimeSnapshot {
+                        id: row.get(0)?,
+                        steam_account_id: row.get(1)?,
+                        captured_at: row.get(2)?,
+                        last_seen_at: row.get(3)?,
+                        trigger: row.get(4)?,
+                        source_path: row.get(5)?,
+                        content_hash: row.get(6)?,
+                        file_count: row.get(7)?,
+                        files: parse_runtime_files(&files_json),
+                        cfg_content: row.get(9)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::new("CFG_RUNTIME_NOT_FOUND", "找不到该运行配置记录"))
+    }
+
+    pub fn list_runtime_cfg_snapshots(
+        &self,
+        steam_account_id: &str,
+    ) -> AppResult<Vec<CfgRuntimeSnapshot>> {
+        let conn = self.0.lock();
+        let mut statement = conn.prepare(
+            "SELECT id,steam_account_id,captured_at,last_seen_at,trigger,source_path,content_hash,file_count,files_json,cfg_content FROM cfg_runtime_snapshots WHERE steam_account_id=?1 ORDER BY last_seen_at DESC, captured_at DESC",
+        )?;
+        let snapshots = statement
+            .query_map([steam_account_id], |row| {
+                let files_json: String = row.get(8)?;
+                Ok(CfgRuntimeSnapshot {
+                    id: row.get(0)?,
+                    steam_account_id: row.get(1)?,
+                    captured_at: row.get(2)?,
+                    last_seen_at: row.get(3)?,
+                    trigger: row.get(4)?,
+                    source_path: row.get(5)?,
+                    content_hash: row.get(6)?,
+                    file_count: row.get(7)?,
+                    files: parse_runtime_files(&files_json),
+                    cfg_content: row.get(9)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(snapshots)
+    }
+
+    pub fn list_runtime_cfg_accounts(&self) -> AppResult<Vec<CfgRuntimeAccountSummary>> {
+        let conn = self.0.lock();
+        let mut statement = conn.prepare(
+            "SELECT a.id,a.steam_id64,a.persona_name,a.account_name,s.id,s.captured_at,s.last_seen_at,s.trigger,s.source_path,s.content_hash,s.file_count,s.files_json,s.cfg_content,(SELECT COUNT(*) FROM cfg_runtime_snapshots x WHERE x.steam_account_id=a.id),p.id,p.name,p.file_name,p.content FROM steam_accounts a JOIN cfg_runtime_snapshots s ON s.id=(SELECT s2.id FROM cfg_runtime_snapshots s2 WHERE s2.steam_account_id=a.id ORDER BY s2.last_seen_at DESC,s2.captured_at DESC LIMIT 1) LEFT JOIN cfg_runtime_profiles r ON r.steam_account_id=a.id LEFT JOIN cfg_profiles p ON p.id=r.profile_id ORDER BY s.last_seen_at DESC",
+        )?;
+        let accounts = statement
+            .query_map([], |row| {
+                let files_json: String = row.get(11)?;
+                let cfg_content: String = row.get(12)?;
+                let profile_content: Option<String> = row.get(17)?;
+                Ok(CfgRuntimeAccountSummary {
+                    steam_account_id: row.get(0)?,
+                    steam_id64: row.get(1)?,
+                    persona_name: row.get(2)?,
+                    account_name: row.get(3)?,
+                    snapshot_id: row.get(4)?,
+                    captured_at: row.get(5)?,
+                    last_seen_at: row.get(6)?,
+                    trigger: row.get(7)?,
+                    source_path: row.get(8)?,
+                    content_hash: row.get(9)?,
+                    file_count: row.get(10)?,
+                    files: parse_runtime_files(&files_json),
+                    history_count: row.get(13)?,
+                    profile_id: row.get(14)?,
+                    profile_name: row.get(15)?,
+                    profile_file_name: row.get(16)?,
+                    profile_dirty: profile_content
+                        .as_ref()
+                        .is_some_and(|content| content != &cfg_content),
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(accounts)
     }
 }
 
@@ -1688,6 +2011,29 @@ mod tests {
                 .as_deref(),
             Some("\"glacier\"")
         );
+    }
+
+    #[test]
+    fn old_backups_without_runtime_cfg_tables_still_restore() {
+        let source_dir = tempfile::tempdir().expect("source");
+        let source = Database::open(&source_dir.path().join("source.db")).expect("source db");
+        source
+            .sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
+        let mut document = source.export_backup().expect("export");
+        let tables = document["tables"].as_object_mut().expect("tables");
+        tables.remove("cfg_runtime_snapshots");
+        tables.remove("cfg_runtime_profiles");
+        let target_dir = tempfile::tempdir().expect("target");
+        let target = Database::open(&target_dir.path().join("target.db")).expect("target db");
+        target
+            .restore_backup(&document)
+            .expect("restore old backup");
+        assert_eq!(target.list_accounts().expect("accounts").len(), 1);
+        assert!(target
+            .list_runtime_cfg_accounts()
+            .expect("runtime")
+            .is_empty());
     }
 
     #[test]

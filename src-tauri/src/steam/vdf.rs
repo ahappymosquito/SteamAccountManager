@@ -188,6 +188,21 @@ fn root(input: &str) -> AppResult<Vec<Entry>> {
     let mut i = 0;
     parse_entries(&tokens, &mut i, false).map(|(entries, _)| entries)
 }
+
+fn collect_text_leaves_from(entries: &[Entry], out: &mut Vec<(String, String)>) {
+    for entry in entries {
+        match &entry.value {
+            Value::Text { value, .. } => out.push((entry.key.clone(), value.clone())),
+            Value::Object { entries, .. } => collect_text_leaves_from(entries, out),
+        }
+    }
+}
+
+pub fn collect_text_leaves(input: &str) -> AppResult<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    collect_text_leaves_from(&root(input)?, &mut out);
+    Ok(out)
+}
 fn text<'a>(entries: &'a [Entry], key: &str) -> Option<&'a str> {
     entries
         .iter()
