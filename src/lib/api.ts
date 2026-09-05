@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Account, AccountCfgAssignment, CfgCaptureResult, CfgProfile, CfgRuntimeAccountSummary, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, RestoreSelection, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchProgress, SwitchResult, TagOption, UpdateInfo, UpdateProgress } from "./types";
+import type { Account, AccountCfgAssignment, CfgCaptureResult, CfgProfile, CfgRuntimeAccountSummary, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, RestoreSelection, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchProgress, SwitchResult, TagOption, TravelIdentity, TravelImportResult, UpdateInfo, UpdateProgress } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -50,6 +50,10 @@ export const api = {
   runtimeCfgAccounts: () => invoke<CfgRuntimeAccountSummary[]>("list_runtime_cfg_accounts"),
   openRuntimeCfgSnapshot: (id:string) => invoke<CfgProfile>("open_runtime_cfg_snapshot",{id}),
   applyRuntimeCfgSnapshot: (id:string) => invoke<CfgProfile>("apply_runtime_cfg_snapshot",{id}),
+  exportCfgText: (path:string,content:string) => invoke<string>("export_cfg_text",{path,content}),
+  travelIdentities: () => invoke<TravelIdentity[]>("list_travel_identities"),
+  exportTravelPack: (path:string) => invoke<TravelImportResult>("export_travel_pack_file",{path}),
+  importTravelPack: (path:string) => invoke<TravelImportResult>("import_travel_pack_file",{path}),
   softwareStatuses: () => invoke<SoftwareStatus[]>("list_software_statuses"),
   downloadProgress: () => invoke<DownloadProgress[]>("list_download_progress"),
   openOfficialUrl: (code:string) => invoke<void>("open_official_url",{code}),

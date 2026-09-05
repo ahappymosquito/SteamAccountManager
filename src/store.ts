@@ -4,7 +4,7 @@ import { create } from "zustand";
 import type { PlatformCode } from "./lib/types";
 import type { AccountSort } from "./lib/filter";
 
-export type Page = "accounts"|"cs2"|"platforms"|"logs"|"settings";
+export type Page = "accounts"|"travel"|"cs2"|"platforms"|"logs"|"settings";
 export type PlatformFilter = ""|PlatformCode|"unlinked";
 export type NoticeKind = "success"|"warning"|"error";
 type Notice = { kind:NoticeKind; text:string } | null;

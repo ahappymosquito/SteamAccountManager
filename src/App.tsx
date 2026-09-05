@@ -1,6 +1,7 @@
 /** Main application shell coordinating navigation, account switching, and feature pages. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BookUser,
   FileClock,
   FileCode2,
   GripVertical,
@@ -56,6 +57,7 @@ import type {
 import { Cs2Page } from "./pages/Cs2Page";
 import { PlatformsPage } from "./pages/PlatformsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { TravelPage } from "./pages/TravelPage";
 import { useUi, type NoticeKind, type PlatformFilter } from "./store";
 
 export { SettingsPage } from "./pages/SettingsPage";
@@ -395,6 +397,12 @@ export default function App() {
               onClick={() => ui.setPage("accounts")}
             />
             <Nav
+              active={ui.page === "travel"}
+              icon={<BookUser />}
+              text="外出资料"
+              onClick={() => ui.setPage("travel")}
+            />
+            <Nav
               active={ui.page === "cs2"}
               icon={<FileCode2 />}
               text="CS2 配置"
@@ -467,6 +475,7 @@ export default function App() {
               }
             />
           )}
+          {ui.page === "travel" && <TravelPage notify={notify} />}
           {ui.page === "cs2" && (
             <Cs2Page notify={notify} />
           )}
@@ -786,11 +795,16 @@ export function AccountsPage({
           <UsersRound />
           <h2>没有符合条件的账号</h2>
           <p>
-            在 Steam 官方客户端登录并勾选“记住我”，或调整当前筛选条件。
+            在 Steam 官方客户端登录并勾选“记住我”，或到「外出资料」查看未登录账号的登录名、平台号和 CFG。
           </p>
-          <button className="button primary" onClick={onAdd}>
-            添加 Steam 账号
-          </button>
+          <div className="button-stack">
+            <button className="button primary" onClick={onAdd}>
+              添加 Steam 账号
+            </button>
+            <button className="button secondary" onClick={() => ui.setPage("travel")}>
+              打开外出资料
+            </button>
+          </div>
         </div>
       ) : (
         <section className="account-list">

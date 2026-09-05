@@ -109,6 +109,20 @@ html,body,#root{height:100%;overflow:hidden}
 .software-actions .button svg{width:15px;height:15px}.empty-line{margin:6px 0 0;color:var(--muted);font-size:11px}
 @media(max-width:1100px){.software-row{grid-template-columns:48px minmax(180px,1fr) auto}.software-actions{grid-column:2/-1}}
 
+/* Travel identities: copy-first cards that do not require local Steam credentials. */
+.travel-list{display:flex;flex-direction:column;gap:10px;margin:0;padding:0;list-style:none}
+.travel-card{padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.travel-card>header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.travel-card>header strong{font-size:14px}
+.travel-card dl{margin:0}
+.travel-card dl>div{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;align-items:center;min-height:34px;border-top:1px solid var(--line)}
+.travel-card dt{color:var(--muted);font-size:11px}
+.travel-card dd{margin:0;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+.travel-platform,.travel-cfg{display:flex;align-items:center;gap:4px;min-width:0;flex:1}
+.travel-platform>span,.travel-cfg>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.travel-cfg .button{padding:4px 8px;font-size:11px}
+@media(max-width:820px){.travel-card dl>div{grid-template-columns:minmax(0,1fr);gap:2px;padding:8px 0}.travel-card dt{font-size:10px}}
+
 /* Compact CS2 CFG profile toolbar and focused editor workbench. */
 .cfg-heading{min-height:64px;margin-bottom:10px}
 .cfg-runtime-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 0 10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}

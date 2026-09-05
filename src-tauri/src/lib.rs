@@ -9,6 +9,7 @@ mod models;
 mod player_query;
 mod software;
 mod steam;
+mod travel;
 mod version;
 
 use crate::database::{validate_steam_id, Database};
@@ -1060,6 +1061,12 @@ fn save_cfg_profile(
 }
 
 #[tauri::command]
+fn export_cfg_text(path: String, content: String) -> AppResult<String> {
+    cs2::export_profile(&PathBuf::from(path), &content)
+        .map(|exported| exported.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn export_cfg_profile(state: State<AppState>, id: String, path: String) -> AppResult<String> {
     let profile = state
         .db
@@ -1146,6 +1153,51 @@ fn open_runtime_cfg_snapshot(state: State<AppState>, id: String) -> AppResult<Cf
 #[tauri::command]
 fn apply_runtime_cfg_snapshot(state: State<AppState>, id: String) -> AppResult<CfgProfile> {
     cs2_runtime::apply_runtime_snapshot(&state.db, &state.data_dir, &id)
+}
+
+#[tauri::command]
+fn list_travel_identities(state: State<AppState>) -> AppResult<Vec<TravelIdentity>> {
+    state.db.list_travel_identities()
+}
+
+#[tauri::command]
+fn export_travel_pack_file(state: State<AppState>, path: String) -> AppResult<TravelImportResult> {
+    let identities = state.db.list_travel_identities()?;
+    let document = travel::build_pack(&identities);
+    write_backup_file(Path::new(&path), &document)?;
+    Ok(TravelImportResult {
+        identity_count: identities.len(),
+        platform_count: identities
+            .iter()
+            .map(|identity| {
+                usize::from(identity.five_e.is_some())
+                    + usize::from(identity.perfect_world.is_some())
+            })
+            .sum(),
+        cfg_count: identities
+            .iter()
+            .filter(|identity| identity.cfg.is_some())
+            .count(),
+    })
+}
+
+#[tauri::command]
+fn import_travel_pack_file(state: State<AppState>, path: String) -> AppResult<TravelImportResult> {
+    let document = read_backup_file(Path::new(&path))?;
+    let identities = travel::parse_pack(&document)?;
+    if identities.is_empty() {
+        return Err(AppError::new(
+            "TRAVEL_PACK_EMPTY",
+            "外出资料包里没有身份记录",
+        ));
+    }
+    let current = state.db.export_backup()?;
+    write_pre_restore_snapshot(&state.data_dir, &current)?;
+    let (result, profiles) = state.db.import_travel_identities(&identities)?;
+    for profile in profiles {
+        cs2::write_managed_profile(&state.data_dir, &profile)?;
+    }
+    Ok(result)
 }
 
 fn resolve_teamspeak_app_with(
@@ -1592,6 +1644,7 @@ pub fn run() {
             import_cfg_profile,
             save_cfg_profile,
             export_cfg_profile,
+            export_cfg_text,
             read_cfg_definition_file,
             write_cfg_definition_file,
             delete_cfg_profile,
@@ -1602,6 +1655,9 @@ pub fn run() {
             list_runtime_cfg_snapshots,
             open_runtime_cfg_snapshot,
             apply_runtime_cfg_snapshot,
+            list_travel_identities,
+            export_travel_pack_file,
+            import_travel_pack_file,
             list_software_statuses,
             list_download_progress,
             open_official_url,

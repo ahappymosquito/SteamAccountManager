@@ -370,6 +370,48 @@ pub struct CfgCaptureResult {
     pub accounts: Vec<CfgRuntimeAccountSummary>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelPlatformCred {
+    pub display_name: Option<String>,
+    pub login_account: Option<String>,
+    pub login_password: Option<String>,
+    pub remark: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelCfg {
+    pub name: String,
+    pub file_name: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelIdentity {
+    #[serde(default)]
+    pub steam_account_id: String,
+    pub steam_id64: String,
+    pub account_name: Option<String>,
+    pub persona_name: Option<String>,
+    pub alias: Option<String>,
+    pub remark: Option<String>,
+    #[serde(default)]
+    pub local_available: bool,
+    pub five_e: Option<TravelPlatformCred>,
+    pub perfect_world: Option<TravelPlatformCred>,
+    pub cfg: Option<TravelCfg>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelImportResult {
+    pub identity_count: usize,
+    pub platform_count: usize,
+    pub cfg_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountCfgAssignment {

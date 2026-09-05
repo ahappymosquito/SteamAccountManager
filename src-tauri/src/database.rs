@@ -3,7 +3,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::{
     Account, AccountCfgAssignment, CfgProfile, CfgRuntimeAccountSummary, CfgRuntimeFileMeta,
     CfgRuntimeSnapshot, LocalSteamAccount, PlatformApp, PlatformLink, PlatformLinkInput,
-    PlatformSummary, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption,
+    PlatformSummary, PlayerRankSummary, PlayerSnapshot, ProfileInput, TagOption, TravelCfg,
+    TravelIdentity, TravelImportResult, TravelPlatformCred,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -1615,6 +1616,273 @@ impl Database {
         Ok(snapshots)
     }
 
+    fn travel_platform_cred(
+        &self,
+        steam_account_id: &str,
+        platform_code: &str,
+    ) -> AppResult<Option<(String, TravelPlatformCred)>> {
+        let conn = self.0.lock();
+        Ok(conn
+            .query_row(
+                "SELECT l.id,p.display_name,p.login_account,p.login_password,p.remark FROM account_platform_links l JOIN platform_accounts p ON p.id=l.platform_account_id WHERE l.steam_account_id=?1 AND p.platform_code=?2 LIMIT 1",
+                params![steam_account_id, platform_code],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        TravelPlatformCred {
+                            display_name: row.get(1)?,
+                            login_account: row.get(2)?,
+                            login_password: row.get(3)?,
+                            remark: row.get(4)?,
+                        },
+                    ))
+                },
+            )
+            .optional()?)
+    }
+
+    fn assigned_or_runtime_cfg(&self, steam_account_id: &str) -> AppResult<Option<TravelCfg>> {
+        let conn = self.0.lock();
+        let assigned = conn
+            .query_row(
+                "SELECT p.name,p.file_name,p.content FROM account_cfg_profiles x JOIN cfg_profiles p ON p.id=x.profile_id WHERE x.steam_account_id=?1",
+                [steam_account_id],
+                |row| {
+                    Ok(TravelCfg {
+                        name: row.get(0)?,
+                        file_name: row.get(1)?,
+                        content: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        if assigned.is_some() {
+            return Ok(assigned);
+        }
+        Ok(conn
+            .query_row(
+                "SELECT p.name,p.file_name,p.content FROM cfg_runtime_profiles r JOIN cfg_profiles p ON p.id=r.profile_id WHERE r.steam_account_id=?1",
+                [steam_account_id],
+                |row| {
+                    Ok(TravelCfg {
+                        name: row.get(0)?,
+                        file_name: row.get(1)?,
+                        content: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn list_travel_identities(&self) -> AppResult<Vec<TravelIdentity>> {
+        let conn = self.0.lock();
+        let mut statement = conn.prepare(
+            "SELECT a.id,a.steam_id64,a.account_name,a.persona_name,a.local_available,p.alias,p.remark FROM steam_accounts a LEFT JOIN account_profiles p ON p.steam_account_id=a.id ORDER BY COALESCE(p.alias,a.persona_name,a.account_name,a.steam_id64) COLLATE NOCASE",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)? != 0,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        drop(conn);
+        let mut identities = Vec::new();
+        for (id, steam_id64, account_name, persona_name, local_available, alias, remark) in rows {
+            identities.push(TravelIdentity {
+                five_e: self.travel_platform_cred(&id, "5e")?.map(|(_, cred)| cred),
+                perfect_world: self
+                    .travel_platform_cred(&id, "perfectworld")?
+                    .map(|(_, cred)| cred),
+                cfg: self.assigned_or_runtime_cfg(&id)?,
+                steam_account_id: id,
+                steam_id64,
+                account_name,
+                persona_name,
+                alias,
+                remark,
+                local_available,
+            });
+        }
+        Ok(identities)
+    }
+
+    fn upsert_travel_account(&self, identity: &TravelIdentity) -> AppResult<String> {
+        validate_steam_id(&identity.steam_id64)?;
+        let now = Utc::now().to_rfc3339();
+        let conn = self.0.lock();
+        if let Some(id) = conn
+            .query_row(
+                "SELECT id FROM steam_accounts WHERE steam_id64=?1",
+                [&identity.steam_id64],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            conn.execute(
+                "UPDATE steam_accounts SET account_name=COALESCE(?1,account_name),persona_name=COALESCE(?2,persona_name),updated_at=?3 WHERE id=?4",
+                params![identity.account_name, identity.persona_name, now, id],
+            )?;
+            conn.execute(
+                "INSERT INTO account_profiles(steam_account_id,alias,remark) VALUES(?1,?2,?3) ON CONFLICT(steam_account_id) DO UPDATE SET alias=COALESCE(excluded.alias,account_profiles.alias),remark=COALESCE(excluded.remark,account_profiles.remark)",
+                params![id, identity.alias, identity.remark],
+            )?;
+            return Ok(id);
+        }
+        let id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO steam_accounts(id,steam_id64,account_name,persona_name,local_available,created_at,updated_at) VALUES(?1,?2,?3,?4,0,?5,?5)",
+            params![id, identity.steam_id64, identity.account_name, identity.persona_name, now],
+        )?;
+        conn.execute(
+            "INSERT INTO account_profiles(steam_account_id,alias,remark) VALUES(?1,?2,?3)",
+            params![id, identity.alias, identity.remark],
+        )?;
+        Ok(id)
+    }
+
+    fn upsert_travel_platform(
+        &self,
+        steam_account_id: &str,
+        platform_code: &str,
+        cred: &TravelPlatformCred,
+    ) -> AppResult<()> {
+        let existing = self.travel_platform_cred(steam_account_id, platform_code)?;
+        let (id, merged) = if let Some((id, current)) = existing {
+            (
+                Some(id),
+                TravelPlatformCred {
+                    display_name: cred.display_name.clone().or(current.display_name),
+                    login_account: cred.login_account.clone().or(current.login_account),
+                    login_password: cred
+                        .login_password
+                        .clone()
+                        .filter(|value| !value.is_empty())
+                        .or(current.login_password),
+                    remark: cred.remark.clone().or(current.remark),
+                },
+            )
+        } else {
+            (None, cred.clone())
+        };
+        self.save_link(&PlatformLinkInput {
+            id,
+            steam_account_id: steam_account_id.to_string(),
+            platform_code: platform_code.to_string(),
+            external_id: merged.display_name.clone(),
+            display_name: merged.display_name,
+            profile_url: None,
+            login_account: merged.login_account,
+            login_password: merged.login_password,
+            remark: merged.remark,
+            status: "unverified".into(),
+        })
+    }
+
+    pub fn import_travel_identities(
+        &self,
+        identities: &[TravelIdentity],
+    ) -> AppResult<(TravelImportResult, Vec<CfgProfile>)> {
+        let mut platform_count = 0;
+        let mut cfg_count = 0;
+        let mut written = Vec::new();
+        for identity in identities {
+            let account_id = self.upsert_travel_account(identity)?;
+            if let Some(cred) = identity
+                .five_e
+                .as_ref()
+                .filter(|cred| travel_cred_has_value(cred))
+            {
+                self.upsert_travel_platform(&account_id, "5e", cred)?;
+                platform_count += 1;
+            }
+            if let Some(cred) = identity
+                .perfect_world
+                .as_ref()
+                .filter(|cred| travel_cred_has_value(cred))
+            {
+                self.upsert_travel_platform(&account_id, "perfectworld", cred)?;
+                platform_count += 1;
+            }
+            if let Some(cfg) = identity
+                .cfg
+                .as_ref()
+                .filter(|cfg| !cfg.content.trim().is_empty())
+            {
+                let existing = self.cfg_assignment_profile_id(&account_id)?;
+                let profile = if let Some(profile_id) = existing {
+                    let profiles = self.list_cfg_profiles()?;
+                    let current = profiles
+                        .into_iter()
+                        .find(|profile| profile.id == profile_id);
+                    if let Some(current) = current.filter(|profile| {
+                        profile
+                            .file_name
+                            .to_ascii_lowercase()
+                            .starts_with("travel-")
+                    }) {
+                        self.save_cfg_profile(&current.id, &cfg.name, &cfg.content)?;
+                        CfgProfile {
+                            content: cfg.content.clone(),
+                            name: cfg.name.clone(),
+                            ..current
+                        }
+                    } else {
+                        let file_name = unique_travel_cfg_file_name(
+                            &identity.steam_id64,
+                            &self
+                                .list_cfg_profiles()?
+                                .into_iter()
+                                .map(|profile| profile.file_name)
+                                .collect::<Vec<_>>(),
+                        );
+                        let created =
+                            self.create_cfg_profile(&cfg.name, &file_name, &cfg.content)?;
+                        self.assign_cfg_profile(&account_id, &created.id)?;
+                        created
+                    }
+                } else {
+                    let file_name = unique_travel_cfg_file_name(
+                        &identity.steam_id64,
+                        &self
+                            .list_cfg_profiles()?
+                            .into_iter()
+                            .map(|profile| profile.file_name)
+                            .collect::<Vec<_>>(),
+                    );
+                    let created = self.create_cfg_profile(
+                        if cfg.name.trim().is_empty() {
+                            "外出配置"
+                        } else {
+                            &cfg.name
+                        },
+                        &file_name,
+                        &cfg.content,
+                    )?;
+                    self.assign_cfg_profile(&account_id, &created.id)?;
+                    created
+                };
+                written.push(profile);
+                cfg_count += 1;
+            }
+        }
+        Ok((
+            TravelImportResult {
+                identity_count: identities.len(),
+                platform_count,
+                cfg_count,
+            },
+            written,
+        ))
+    }
+
     pub fn list_runtime_cfg_accounts(&self) -> AppResult<Vec<CfgRuntimeAccountSummary>> {
         let conn = self.0.lock();
         let mut statement = conn.prepare(
@@ -1650,6 +1918,40 @@ impl Database {
             .collect::<Result<_, _>>()?;
         Ok(accounts)
     }
+}
+
+fn travel_cred_has_value(cred: &TravelPlatformCred) -> bool {
+    [
+        cred.display_name.as_deref(),
+        cred.login_account.as_deref(),
+        cred.login_password.as_deref(),
+        cred.remark.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| !value.trim().is_empty())
+}
+
+fn unique_travel_cfg_file_name(steam_id64: &str, existing: &[String]) -> String {
+    let suffix = steam_id64
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    let known = existing
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let mut candidate = format!("travel-{suffix}.cfg");
+    let mut index = 2;
+    while known.contains(&candidate.to_ascii_lowercase()) {
+        candidate = format!("travel-{suffix}-{index}.cfg");
+        index += 1;
+    }
+    candidate
 }
 
 pub fn validate_steam_id(value: &str) -> AppResult<()> {
@@ -2010,6 +2312,64 @@ mod tests {
                 .expect("restored setting")
                 .as_deref(),
             Some("\"glacier\"")
+        );
+    }
+
+    #[test]
+    fn travel_identities_import_without_local_steam_credentials() {
+        let home_dir = tempfile::tempdir().expect("home");
+        let home = Database::open(&home_dir.path().join("home.db")).expect("home db");
+        home.sync_accounts(&[local_account("76561198000000001")])
+            .expect("scan");
+        let account = home.list_accounts().expect("account").remove(0);
+        home.save_link(&PlatformLinkInput {
+            id: Some("five".into()),
+            steam_account_id: account.id.clone(),
+            platform_code: "5e".into(),
+            external_id: Some("查询昵称".into()),
+            display_name: Some("查询昵称".into()),
+            profile_url: None,
+            login_account: Some("five-login".into()),
+            login_password: Some("five-pass".into()),
+            remark: None,
+            status: "unverified".into(),
+        })
+        .expect("5e");
+        let cfg = home
+            .create_cfg_profile("主力配置", "travel-home.cfg", "sensitivity 1.2\n")
+            .expect("cfg");
+        home.assign_cfg_profile(&account.id, &cfg.id)
+            .expect("assign");
+
+        let pack = home.list_travel_identities().expect("export");
+        assert_eq!(pack.len(), 1);
+        assert_eq!(pack[0].account_name.as_deref(), Some("alpha"));
+        assert_eq!(
+            pack[0]
+                .five_e
+                .as_ref()
+                .and_then(|cred| cred.login_password.as_deref()),
+            Some("five-pass")
+        );
+
+        let cafe_dir = tempfile::tempdir().expect("cafe");
+        let cafe = Database::open(&cafe_dir.path().join("cafe.db")).expect("cafe db");
+        cafe.import_travel_identities(&pack).expect("import");
+        assert!(cafe.list_accounts().expect("switch list").is_empty());
+        let imported = cafe.list_travel_identities().expect("travel");
+        assert_eq!(imported.len(), 1);
+        assert!(!imported[0].local_available);
+        assert_eq!(imported[0].account_name.as_deref(), Some("alpha"));
+        assert_eq!(
+            imported[0]
+                .five_e
+                .as_ref()
+                .and_then(|cred| cred.login_account.as_deref()),
+            Some("five-login")
+        );
+        assert_eq!(
+            imported[0].cfg.as_ref().map(|cfg| cfg.content.as_str()),
+            Some("sensitivity 1.2\n")
         );
     }
 
