@@ -1183,6 +1183,23 @@ fn export_travel_pack_file(state: State<AppState>, path: String) -> AppResult<Tr
     })
 }
 
+fn travel_pack_counts(identities: &[TravelIdentity]) -> TravelImportResult {
+    TravelImportResult {
+        identity_count: identities.len(),
+        platform_count: identities
+            .iter()
+            .map(|identity| {
+                usize::from(identity.five_e.is_some())
+                    + usize::from(identity.perfect_world.is_some())
+            })
+            .sum(),
+        cfg_count: identities
+            .iter()
+            .filter(|identity| identity.cfg.is_some())
+            .count(),
+    }
+}
+
 fn import_travel_identities_into(
     state: &AppState,
     identities: &[TravelIdentity],
@@ -1200,6 +1217,24 @@ fn import_travel_identities_into(
         cs2::write_managed_profile(&state.data_dir, &profile)?;
     }
     Ok(result)
+}
+
+fn open_vault_session(state: &AppState, name: &str, pin: &str) -> AppResult<VaultReplaceResult> {
+    let identities = vault::download_pack(name, pin)?;
+    if identities.is_empty() {
+        return Err(AppError::new(
+            "TRAVEL_PACK_EMPTY",
+            "外出资料包里没有身份记录",
+        ));
+    }
+    let steam = optional_steam_dir(state);
+    let import = travel_pack_counts(&identities);
+    let deploy = vault::deploy_identities(steam.as_deref(), &identities);
+    Ok(VaultReplaceResult {
+        identities,
+        import,
+        deploy,
+    })
 }
 
 fn optional_steam_dir(state: &AppState) -> Option<PathBuf> {
@@ -1253,13 +1288,15 @@ fn upload_travel_vault(state: State<AppState>, name: String, pin: String) -> App
 }
 
 #[tauri::command]
-fn download_travel_vault(
-    state: State<AppState>,
-    name: String,
-    pin: String,
-) -> AppResult<TravelImportResult> {
+fn download_travel_vault(name: String, pin: String) -> AppResult<Vec<TravelIdentity>> {
     let identities = vault::download_pack(&name, &pin)?;
-    import_travel_identities_into(&state, &identities)
+    if identities.is_empty() {
+        return Err(AppError::new(
+            "TRAVEL_PACK_EMPTY",
+            "外出资料包里没有身份记录",
+        ));
+    }
+    Ok(identities)
 }
 
 #[tauri::command]
@@ -1268,13 +1305,7 @@ fn replace_travel_vault(
     name: String,
     pin: String,
 ) -> AppResult<VaultReplaceResult> {
-    let identities = vault::download_pack(&name, &pin)?;
-    let import = import_travel_identities_into(&state, &identities)?;
-    let steam = optional_steam_dir(&state);
-    Ok(VaultReplaceResult {
-        import,
-        deploy: vault::deploy_identities(steam.as_deref(), &identities),
-    })
+    open_vault_session(&state, &name, &pin)
 }
 
 #[tauri::command]
@@ -1882,6 +1913,35 @@ mod tests {
     fn masks_names() {
         assert_eq!(mask_name("abcdefgh"), "ab***gh");
         assert_eq!(mask_name("abc"), "***");
+    }
+
+    #[test]
+    fn vault_open_counts_pack_without_needing_a_database_import() {
+        let identities = vec![TravelIdentity {
+            steam_account_id: String::new(),
+            steam_id64: "76561198000000001".into(),
+            account_name: Some("alpha".into()),
+            persona_name: None,
+            alias: None,
+            remark: None,
+            local_available: false,
+            five_e: Some(TravelPlatformCred {
+                display_name: None,
+                login_account: Some("five".into()),
+                login_password: Some("secret".into()),
+                remark: None,
+            }),
+            perfect_world: None,
+            cfg: Some(TravelCfg {
+                name: "外出".into(),
+                file_name: "travel-1.cfg".into(),
+                content: "sensitivity 1\n".into(),
+            }),
+        }];
+        let counts = travel_pack_counts(&identities);
+        assert_eq!(counts.identity_count, 1);
+        assert_eq!(counts.platform_count, 1);
+        assert_eq!(counts.cfg_count, 1);
     }
 
     #[test]

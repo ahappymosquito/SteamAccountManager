@@ -432,6 +432,7 @@ pub struct CfgDeployReport {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultReplaceResult {
+    pub identities: Vec<TravelIdentity>,
     pub import: TravelImportResult,
     pub deploy: CfgDeployReport,
 }

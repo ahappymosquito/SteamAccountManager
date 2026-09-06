@@ -1,4 +1,4 @@
-/** 外出资料：用自己起的短名字和口令打开云存档，复制账号密码与 CFG。 */
+/** 外出资料：短名字+口令打开云存档；打开结果只留在本次会话，不写入本机库。 */
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -31,14 +31,17 @@ export function TravelPage({
   notify: (kind: "success" | "error", text: string) => void;
 }) {
   const [items, setItems] = useState<TravelIdentity[]>([]);
+  const [sessionOpen, setSessionOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [name, setName] = useState("");
   const [pin, setPin] = useState("");
   const [deploy, setDeploy] = useState<CfgDeployReport | null>(null);
 
-  const refresh = async () => {
-    setItems(await api.travelIdentities());
+  const loadLocal = async () => {
+    const local = await api.travelIdentities();
+    setItems(local.filter((item) => item.localAvailable));
+    setSessionOpen(false);
   };
 
   useEffect(() => {
@@ -50,7 +53,7 @@ export function TravelPage({
         /* 家用机才会记住名字，网吧打开不落盘 */
       }
       try {
-        await refresh();
+        await loadLocal();
       } catch (error) {
         notify("error", errorMessage(error));
       }
@@ -101,7 +104,9 @@ export function TravelPage({
       const login = credentials();
       if (!login) return;
       const result = await api.replaceTravelVault(login.name, login.pin);
-      await refresh();
+      setItems(result.identities);
+      setSessionOpen(true);
+      setRevealed({});
       setDeploy(result.deploy);
       notify("success", result.deploy.message);
     });
@@ -142,7 +147,8 @@ export function TravelPage({
     setBusy(true);
     try {
       const result = await api.importTravelPack(path);
-      await refresh();
+      setItems(await api.travelIdentities());
+      setSessionOpen(false);
       notify("success", `已导入 ${result.identityCount} 个身份`);
     } catch (error) {
       notify("error", errorMessage(error) || "导入失败，请换一份外出资料包再试");
@@ -209,7 +215,7 @@ export function TravelPage({
             <LogIn />
             <span>打开</span>
           </button>
-          {items.length > 0 ? (
+          {!sessionOpen && items.length > 0 ? (
             <button
               className="button secondary"
               disabled={busy}
