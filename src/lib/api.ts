@@ -11,6 +11,7 @@ export const api = {
   refreshSteamProfileMedia: (force=false) => invoke<number>("refresh_steam_profile_media",{force}),
   status: () => invoke<CurrentStatus>("current_status"),
   saveProfile: (input:ProfileInput) => invoke<void>("save_profile", { input }),
+  deleteAccount: (id:string) => invoke<void>("delete_account", { id }),
   tags: () => invoke<TagOption[]>("list_tags"),
   beginSteamLogin: () => invoke<SteamLoginSession>("begin_steam_login"),
   steamLoginStatus: (sessionId:string) => invoke<SteamLoginStatus>("get_steam_login_status", { sessionId }),

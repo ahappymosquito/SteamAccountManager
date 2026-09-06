@@ -122,4 +122,11 @@ describe("AccountDrawer", () => {
     fireEvent.click(screen.getByRole("button", { name: "复制5E登录账号" }));
     await waitFor(() => expect(mocks.writeText).toHaveBeenCalledWith("five-login"));
   });
+
+  it("offers delete for the current account", () => {
+    const onDelete = vi.fn();
+    renderDrawer({ onDelete });
+    fireEvent.click(screen.getByRole("button", { name: "删除账号" }));
+    expect(onDelete).toHaveBeenCalledWith(account);
+  });
 });

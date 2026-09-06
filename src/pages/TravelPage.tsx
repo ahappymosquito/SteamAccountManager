@@ -1,17 +1,15 @@
-/** 外出资料：短名字+口令打开云存档；打开结果只留在本次会话，不写入本机库。 */
+/** 外出资料：短名字+口令打开云存档，写入账号列表。 */
 import { useEffect, useState } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   CloudUpload,
   Copy,
-  Download,
   Eye,
   EyeOff,
   LogIn,
-  Upload,
 } from "lucide-react";
 import { api } from "../lib/api";
+import { useUi } from "../store";
 import type {
   AppError,
   CfgDeployReport,
@@ -27,11 +25,13 @@ const identityTitle = (item: TravelIdentity) =>
 
 export function TravelPage({
   notify,
+  onOpened,
 }: {
   notify: (kind: "success" | "error", text: string) => void;
+  onOpened?: () => void;
 }) {
+  const ui = useUi();
   const [items, setItems] = useState<TravelIdentity[]>([]);
-  const [sessionOpen, setSessionOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [name, setName] = useState("");
@@ -39,9 +39,7 @@ export function TravelPage({
   const [deploy, setDeploy] = useState<CfgDeployReport | null>(null);
 
   const loadLocal = async () => {
-    const local = await api.travelIdentities();
-    setItems(local.filter((item) => item.localAvailable));
-    setSessionOpen(false);
+    setItems(await api.travelIdentities());
   };
 
   useEffect(() => {
@@ -105,10 +103,14 @@ export function TravelPage({
       if (!login) return;
       const result = await api.replaceTravelVault(login.name, login.pin);
       setItems(result.identities);
-      setSessionOpen(true);
       setRevealed({});
       setDeploy(result.deploy);
-      notify("success", result.deploy.message);
+      onOpened?.();
+      ui.setPage("accounts");
+      notify(
+        "success",
+        result.deploy.message || `已打开 ${result.import.identityCount} 个账号`,
+      );
     });
 
   const uploadVault = () =>
@@ -118,60 +120,6 @@ export function TravelPage({
       await api.uploadTravelVault(login.name, login.pin);
       notify("success", "已按这个名字上传");
     });
-
-  const exportPack = async () => {
-    const path = await save({
-      defaultPath: "外出资料.json",
-      filters: [{ name: "外出资料包", extensions: ["json"] }],
-      title: "导出外出资料包",
-    });
-    if (!path) return;
-    setBusy(true);
-    try {
-      const result = await api.exportTravelPack(path);
-      notify("success", `已导出 ${result.identityCount} 个身份`);
-    } catch (error) {
-      notify("error", errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const importPack = async () => {
-    const path = await open({
-      multiple: false,
-      filters: [{ name: "外出资料包", extensions: ["json"] }],
-      title: "导入外出资料包",
-    });
-    if (typeof path !== "string") return;
-    setBusy(true);
-    try {
-      const result = await api.importTravelPack(path);
-      setItems(await api.travelIdentities());
-      setSessionOpen(false);
-      notify("success", `已导入 ${result.identityCount} 个身份`);
-    } catch (error) {
-      notify("error", errorMessage(error) || "导入失败，请换一份外出资料包再试");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const exportCfg = async (item: TravelIdentity) => {
-    if (!item.cfg) return;
-    const path = await save({
-      defaultPath: item.cfg.fileName,
-      filters: [{ name: "CS2 CFG", extensions: ["cfg"] }],
-      title: "导出 CFG",
-    });
-    if (!path) return;
-    try {
-      const exported = await api.exportCfgText(path, item.cfg.content);
-      notify("success", `已导出到 ${exported}`);
-    } catch (error) {
-      notify("error", errorMessage(error));
-    }
-  };
 
   return (
     <section className="travel-page">
@@ -215,7 +163,7 @@ export function TravelPage({
             <LogIn />
             <span>打开</span>
           </button>
-          {!sessionOpen && items.length > 0 ? (
+          {items.length > 0 ? (
             <button
               className="button secondary"
               disabled={busy}
@@ -309,13 +257,6 @@ export function TravelPage({
                         >
                           <Copy />
                         </button>
-                        <button
-                          className="button secondary"
-                          type="button"
-                          onClick={() => void exportCfg(item)}
-                        >
-                          导出 CFG
-                        </button>
                       </span>
                     ) : (
                       <span className="muted-copy">未收录</span>
@@ -327,26 +268,6 @@ export function TravelPage({
           ))}
         </ul>
       ) : null}
-      <div className="travel-usb">
-        <button
-          className="button secondary"
-          disabled={busy}
-          type="button"
-          onClick={() => void importPack()}
-        >
-          <Upload />
-          <span>导入 U 盘</span>
-        </button>
-        <button
-          className="button secondary"
-          disabled={busy}
-          type="button"
-          onClick={() => void exportPack()}
-        >
-          <Download />
-          <span>导出 U 盘</span>
-        </button>
-      </div>
     </section>
   );
 }

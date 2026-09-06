@@ -508,7 +508,7 @@ export function SettingsPage({
         <div className="section-heading">
           <h2 id="backup-tools-title"><Database />备份与恢复</h2>
           <p>
-            整机搬家用软件备份；网吧请到「外出资料」用自己的名字和口令打开（不写入本机库），或导入资料包。备份是明文 JSON，含平台登录账号和密码，不含查询 Token 或 Steam 密码。
+            整机搬家用软件备份；网吧请到「外出资料」用名字和口令打开，账号会出现在列表里。备份是明文 JSON，含平台登录账号和密码，不含查询 Token 或 Steam 密码。
             从文件恢复前，当前资料会自动保存在应用数据目录。未匹配的备份账号不会进入切号列表。
           </p>
         </div>

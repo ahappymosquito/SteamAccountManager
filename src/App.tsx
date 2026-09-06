@@ -7,6 +7,7 @@ import {
   GripVertical,
   Heart,
   Info,
+  Trash2,
   LayoutGrid,
   Plus,
   RefreshCw,
@@ -316,6 +317,23 @@ export default function App() {
       throw error;
     }
   };
+  const deleteAccount = async (account: Account) => {
+    if (
+      !confirm(
+        `删除“${account.personaName || account.accountName || "该账号"}”的资料？不会改 Steam 客户端。`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.deleteAccount(account.id);
+      if (details?.id === account.id) setDetails(undefined);
+      await load();
+      notify("success", "账号已删除");
+    } catch (error) {
+      notify("error", errorMessage(error));
+    }
+  };
   const performSwitch = async (onProgress: (progress: SwitchProgress) => void) => {
     if (!switching) return;
     try {
@@ -473,9 +491,12 @@ export default function App() {
                   tags: account.tags,
                 })
               }
+              onDelete={(account) => void deleteAccount(account)}
             />
           )}
-          {ui.page === "travel" && <TravelPage notify={notify} />}
+          {ui.page === "travel" && (
+            <TravelPage notify={notify} onOpened={() => void load()} />
+          )}
           {ui.page === "cs2" && (
             <Cs2Page notify={notify} />
           )}
@@ -509,6 +530,7 @@ export default function App() {
           onSave={saveProfile}
           notify={notify}
           onChanged={() => void load()}
+          onDelete={(account) => void deleteAccount(account)}
         />
       )}
       {platformEditor && (
@@ -655,6 +677,7 @@ export function AccountsPage({
   onSteamOnlySwitch,
   onSwitch,
   onFavorite,
+  onDelete,
 }: {
   accounts: Account[];
   tagOptions: TagOption[];
@@ -671,6 +694,7 @@ export function AccountsPage({
   onSteamOnlySwitch: () => void;
   onSwitch: (account: Account) => void;
   onFavorite: (account: Account) => void;
+  onDelete: (account: Account) => void;
 }) {
   const reorderEnabled =
     !ui.query.trim() &&
@@ -795,7 +819,7 @@ export function AccountsPage({
           <UsersRound />
           <h2>没有符合条件的账号</h2>
           <p>
-            在 Steam 官方客户端登录并勾选“记住我”，或到「外出资料」查看未登录账号的登录名、平台号和 CFG。
+            在 Steam 官方客户端登录并勾选“记住我”，或到「外出资料」用名字和口令打开云存档。
           </p>
           <div className="button-stack">
             <button className="button primary" onClick={onAdd}>
@@ -863,9 +887,13 @@ export function AccountsPage({
                   <div className="account-title">
                     <h2>
                       {account.personaName ||
+                        account.accountName ||
                         "未命名 Steam 账号"}
                     </h2>
                     {account.favorite && <Star className="favorite" />}
+                    {account.localAvailable === false ? (
+                      <span className="badge unavailable">无本机凭证</span>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -896,7 +924,21 @@ export function AccountsPage({
                   <span className="action-label">查看详情</span>
                 </button>
                 <button
+                  className="icon-button"
+                  title="删除"
+                  aria-label={`删除${account.personaName || account.accountName || "账号"}`}
+                  onClick={() => onDelete(account)}
+                >
+                  <Trash2 />
+                </button>
+                <button
                   className="button primary stable-action"
+                  disabled={account.localAvailable === false}
+                  title={
+                    account.localAvailable === false
+                      ? "没有本机 Steam 凭证，不能切号"
+                      : undefined
+                  }
                   onClick={() => onSwitch(account)}
                 >
                   <span className="action-label">切换账号</span>

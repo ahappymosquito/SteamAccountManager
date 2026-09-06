@@ -36,6 +36,8 @@ pub struct Account {
     pub avatar_version: Option<String>,
     pub avatar_frame_path: Option<String>,
     pub avatar_frame_version: Option<String>,
+    #[serde(default)]
+    pub local_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

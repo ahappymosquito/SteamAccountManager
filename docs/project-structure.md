@@ -60,7 +60,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 
 ### 页面
 
-- `pages/TravelPage.tsx`：外出资料卡，短名字+口令打开云存档（会话内展示，不落库）与 U 盘身份包。
+- `pages/TravelPage.tsx`：外出资料卡，短名字+口令打开云存档并写入账号列表。
 - `pages/Cs2Page.tsx`：CFG 方案文件管理、源码编辑、注释刷新、导入导出，以及本机运行配置记录。
 - `pages/PlatformsPage.tsx`：统一管理 Steam、5E、完美和 TeamSpeak 3 的发现、下载、路径配置、启动与可持久化拖拽顺序。
 - `pages/SettingsPage.tsx`：切换超时、默认折叠的平台凭据、统一数据导入导出与备份恢复。版本与更新入口在左侧栏底部。

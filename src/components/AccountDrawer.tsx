@@ -13,6 +13,7 @@ import {
   Link2,
   Plus,
   Save,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -76,6 +77,7 @@ export function AccountDrawer({
   onSave,
   notify,
   onChanged,
+  onDelete,
 }: {
   account: Account;
   tagOptions: TagOption[];
@@ -84,6 +86,7 @@ export function AccountDrawer({
   onSave: (input: ProfileInput) => Promise<void>;
   notify: (kind: "success" | "error", text: string) => void;
   onChanged: () => void;
+  onDelete?: (account: Account) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [alias, setAlias] = useState(account.alias ?? "");
@@ -222,6 +225,15 @@ export function AccountDrawer({
                   编辑资料
                 </button>
               )}
+              {onDelete ? (
+                <button
+                  className="button danger"
+                  onClick={() => onDelete(account)}
+                >
+                  <Trash2 />
+                  删除账号
+                </button>
+              ) : null}
               <Dialog.Close className="icon-button" aria-label="关闭详情">
                 <X />
               </Dialog.Close>

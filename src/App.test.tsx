@@ -88,6 +88,7 @@ describe("AccountsPage ranking controls", () => {
     onSteamOnlySwitch: vi.fn(),
     onSwitch: vi.fn(),
     onFavorite: vi.fn(),
+    onDelete: vi.fn(),
   };
 
   it("shows score sorting only while the 5E filter is active", () => {

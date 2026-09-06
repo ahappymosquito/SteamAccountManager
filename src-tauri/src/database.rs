@@ -670,7 +670,7 @@ impl Database {
 
     pub fn list_accounts(&self) -> AppResult<Vec<Account>> {
         let conn = self.0.lock();
-        let mut stmt = conn.prepare("SELECT a.id,a.steam_id64,a.account_name,a.persona_name,a.last_local_seen_at,a.last_switched_at,a.created_at,a.updated_at,p.alias,p.remark,p.group_name,p.favorite FROM steam_accounts a LEFT JOIN account_profiles p ON p.steam_account_id=a.id WHERE a.local_available=1 ORDER BY p.favorite DESC,COALESCE(a.last_switched_at,a.created_at) DESC")?;
+        let mut stmt = conn.prepare("SELECT a.id,a.steam_id64,a.account_name,a.persona_name,a.last_local_seen_at,a.last_switched_at,a.created_at,a.updated_at,p.alias,p.remark,p.group_name,p.favorite,a.local_available FROM steam_accounts a LEFT JOIN account_profiles p ON p.steam_account_id=a.id ORDER BY a.local_available DESC,p.favorite DESC,COALESCE(a.last_switched_at,a.created_at) DESC")?;
         let rows = stmt.query_map([], |r| {
             Ok(Account {
                 id: r.get(0)?,
@@ -693,6 +693,7 @@ impl Database {
                 avatar_version: None,
                 avatar_frame_path: None,
                 avatar_frame_version: None,
+                local_available: r.get::<_, i64>(12)? != 0,
             })
         })?;
         let mut accounts: Vec<Account> = rows.collect::<Result<_, _>>()?;
@@ -1101,6 +1102,17 @@ impl Database {
             "UPDATE steam_accounts SET last_switched_at=?1,updated_at=?1 WHERE steam_id64=?2",
             params![Utc::now().to_rfc3339(), steam_id],
         )?;
+        Ok(())
+    }
+
+    pub fn delete_account(&self, id: &str) -> AppResult<()> {
+        let deleted = self
+            .0
+            .lock()
+            .execute("DELETE FROM steam_accounts WHERE id=?1", [id])?;
+        if deleted == 0 {
+            return Err(AppError::new("ACCOUNT_NOT_FOUND", "找不到该账号"));
+        }
         Ok(())
     }
 
@@ -2148,7 +2160,9 @@ mod tests {
         let account = db.list_accounts().expect("accounts").remove(0);
         assert_eq!(account.tags.len(), 2);
         db.sync_accounts(&[]).expect("credentials removed");
-        assert!(db.list_accounts().expect("hidden list").is_empty());
+        let hidden = db.list_accounts().expect("kept without credentials");
+        assert_eq!(hidden.len(), 1);
+        assert!(!hidden[0].local_available);
         assert_eq!(db.list_tags().expect("tag history").len(), 2);
         db.sync_accounts(&[local_account("76561198000000001")])
             .expect("credentials restored");
@@ -2355,7 +2369,9 @@ mod tests {
         let cafe_dir = tempfile::tempdir().expect("cafe");
         let cafe = Database::open(&cafe_dir.path().join("cafe.db")).expect("cafe db");
         cafe.import_travel_identities(&pack).expect("import");
-        assert!(cafe.list_accounts().expect("switch list").is_empty());
+        let listed = cafe.list_accounts().expect("account list");
+        assert_eq!(listed.len(), 1);
+        assert!(!listed[0].local_available);
         let imported = cafe.list_travel_identities().expect("travel");
         assert_eq!(imported.len(), 1);
         assert!(!imported[0].local_available);
@@ -2371,6 +2387,8 @@ mod tests {
             imported[0].cfg.as_ref().map(|cfg| cfg.content.as_str()),
             Some("sensitivity 1.2\n")
         );
+        cafe.delete_account(&listed[0].id).expect("delete");
+        assert!(cafe.list_accounts().expect("deleted").is_empty());
     }
 
     #[test]
