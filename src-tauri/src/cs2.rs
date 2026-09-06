@@ -180,7 +180,8 @@ fn steam_library_roots(steam_dir: &Path) -> Vec<PathBuf> {
     roots
 }
 
-pub fn cs2_cfg_directory(steam_dir: &Path) -> AppResult<PathBuf> {
+fn cs2_game_cfg_candidates(steam_dir: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
     for root in steam_library_roots(steam_dir) {
         let manifest = root.join("steamapps").join("appmanifest_730.acf");
         let Ok(content) = fs::read_to_string(&manifest) else {
@@ -188,16 +189,41 @@ pub fn cs2_cfg_directory(steam_dir: &Path) -> AppResult<PathBuf> {
         };
         let install_dir = quoted_value(&content, "installdir")
             .unwrap_or_else(|| "Counter-Strike Global Offensive".to_string());
-        let cfg = root
-            .join("steamapps")
-            .join("common")
-            .join(install_dir)
-            .join("game")
-            .join("csgo")
-            .join("cfg");
-        if cfg.is_dir() {
-            return Ok(cfg);
+        candidates.push(
+            root.join("steamapps")
+                .join("common")
+                .join(install_dir)
+                .join("game")
+                .join("csgo")
+                .join("cfg"),
+        );
+    }
+    candidates
+}
+
+pub fn cs2_cfg_directory(steam_dir: &Path) -> AppResult<PathBuf> {
+    cs2_game_cfg_candidates(steam_dir)
+        .into_iter()
+        .find(|path| path.is_dir())
+        .ok_or_else(|| {
+            AppError::new(
+                "CS2_INSTALLATION_NOT_FOUND",
+                "未找到 CS2 安装目录，请先在 Steam 安装并运行一次 CS2",
+            )
+        })
+}
+
+fn ensure_cs2_cfg_directory(steam_dir: &Path) -> AppResult<(PathBuf, bool)> {
+    if let Ok(existing) = cs2_cfg_directory(steam_dir) {
+        return Ok((existing, false));
+    }
+    for cfg in cs2_game_cfg_candidates(steam_dir) {
+        if !cfg.parent().is_some_and(|path| path.is_dir()) {
+            continue;
         }
+        fs::create_dir_all(&cfg)
+            .map_err(|_| AppError::new("CS2_CFG_WRITE_FAILED", "无法创建 CS2 cfg 目录"))?;
+        return Ok((cfg, true));
     }
     Err(AppError::new(
         "CS2_INSTALLATION_NOT_FOUND",
@@ -207,6 +233,82 @@ pub fn cs2_cfg_directory(steam_dir: &Path) -> AppResult<PathBuf> {
 
 pub fn is_installed(steam_dir: &Path) -> bool {
     cs2_cfg_directory(steam_dir).is_ok()
+}
+
+pub fn deploy_cfg_contents(
+    steam_dir: Option<&Path>,
+    files: &[(String, String)],
+) -> crate::models::CfgDeployReport {
+    use crate::models::CfgDeployReport;
+    let first_name = files
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .find(|name| !name.is_empty())
+        .unwrap_or("autoexec.cfg");
+    let exec_command = format!("exec {first_name}");
+    if files.is_empty() {
+        return CfgDeployReport {
+            game_ready: false,
+            written: Vec::new(),
+            exec_command,
+            message: "存档里没有 CFG。".into(),
+        };
+    }
+    let Some(steam_dir) = steam_dir else {
+        return CfgDeployReport {
+            game_ready: false,
+            written: Vec::new(),
+            exec_command: exec_command.clone(),
+            message: format!(
+                "还没检测到 Steam/CS2。先安装并启动一次 CS2，然后在控制台输入：{exec_command}"
+            ),
+        };
+    };
+    let Ok((directory, created)) = ensure_cs2_cfg_directory(steam_dir) else {
+        return CfgDeployReport {
+            game_ready: false,
+            written: Vec::new(),
+            exec_command: exec_command.clone(),
+            message: format!(
+                "CS2 还没有启动过（找不到 game\\csgo\\cfg）。先启动一次游戏，再在控制台输入：{exec_command}"
+            ),
+        };
+    };
+    let mut written = Vec::new();
+    for (file_name, content) in files {
+        let Ok(safe_name) = validate_cfg_file_name(file_name) else {
+            continue;
+        };
+        let target = directory.join(&safe_name);
+        if steam::atomic_write_text(&target, content).is_ok() {
+            written.push(safe_name);
+        }
+    }
+    if written.is_empty() {
+        return CfgDeployReport {
+            game_ready: false,
+            written,
+            exec_command: exec_command.clone(),
+            message: format!("未能写入 CFG。可手动放入 game\\csgo\\cfg 后输入：{exec_command}"),
+        };
+    }
+    let exec_command = format!("exec {}", written[0]);
+    let files_label = written.join("、");
+    let message = if created {
+        format!(
+            "已写入 {files_label}。这台电脑还没启动过 CS2 配置目录；启动游戏后在控制台输入：{exec_command}"
+        )
+    } else {
+        format!(
+            "已写入 {files_label}。若游戏已经打开，在控制台输入：{exec_command}；下次切号会带上 +exec。"
+        )
+    };
+    CfgDeployReport {
+        game_ready: true,
+        written,
+        exec_command,
+        message,
+    }
 }
 
 pub fn userdata_cfg_directory(steam_dir: &Path, steam_id64: &str) -> AppResult<PathBuf> {
@@ -342,6 +444,73 @@ mod tests {
         let steam = tempfile::tempdir().expect("steam root");
 
         assert!(!is_installed(steam.path()));
+        let report = deploy_cfg_contents(
+            Some(steam.path()),
+            &[("travel-1.cfg".into(), "sensitivity 1\n".into())],
+        );
+        assert!(!report.game_ready);
+        assert_eq!(report.exec_command, "exec travel-1.cfg");
+        assert!(report.message.contains("exec travel-1.cfg"));
+    }
+
+    #[test]
+    fn writes_cfg_when_game_directory_exists() {
+        let steam = tempfile::tempdir().expect("steam root");
+        fs::create_dir_all(steam.path().join("steamapps")).expect("steamapps");
+        fs::write(
+            steam.path().join("steamapps/appmanifest_730.acf"),
+            "\"AppState\" { \"installdir\" \"Counter-Strike Global Offensive\" }",
+        )
+        .expect("manifest");
+        let cfg = steam
+            .path()
+            .join("steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg");
+        fs::create_dir_all(&cfg).expect("cfg");
+
+        let report = deploy_cfg_contents(
+            Some(steam.path()),
+            &[("travel-1.cfg".into(), "sensitivity 1.2\n".into())],
+        );
+        assert!(report.game_ready);
+        assert_eq!(report.written, vec!["travel-1.cfg"]);
+        assert_eq!(
+            fs::read_to_string(cfg.join("travel-1.cfg")).expect("written cfg"),
+            "sensitivity 1.2\n"
+        );
+    }
+
+    #[test]
+    fn creates_cfg_directory_when_cs2_has_not_started() {
+        let steam = tempfile::tempdir().expect("steam root");
+        fs::create_dir_all(steam.path().join("steamapps")).expect("steamapps");
+        fs::write(
+            steam.path().join("steamapps/appmanifest_730.acf"),
+            "\"AppState\" { \"installdir\" \"Counter-Strike Global Offensive\" }",
+        )
+        .expect("manifest");
+        let game = steam
+            .path()
+            .join("steamapps/common/Counter-Strike Global Offensive/game/csgo");
+        fs::create_dir_all(&game).expect("game");
+
+        let report = deploy_cfg_contents(
+            Some(steam.path()),
+            &[("travel-1.cfg".into(), "volume 0.5\n".into())],
+        );
+        assert!(report.game_ready);
+        assert!(report.message.contains("还没启动过"));
+        assert_eq!(
+            fs::read_to_string(game.join("cfg/travel-1.cfg")).expect("created cfg"),
+            "volume 0.5\n"
+        );
+    }
+
+    #[test]
+    fn tells_user_the_exec_command_when_steam_is_missing() {
+        let report = deploy_cfg_contents(None, &[("practice.cfg".into(), "unbindall\n".into())]);
+        assert!(!report.game_ready);
+        assert_eq!(report.exec_command, "exec practice.cfg");
+        assert!(report.written.is_empty());
     }
 
     #[test]

@@ -1,17 +1,26 @@
-/** 外出资料卡：不依赖本机 Steam 凭证查看并复制 Steam/5E/完美账号与 CFG。 */
+/** 外出资料卡：U 盘资料包，以及按 TeamSpeak Unique ID 登录云存档。 */
 import { useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   BookUser,
+  CloudDownload,
+  CloudUpload,
   Copy,
   Download,
   Eye,
   EyeOff,
+  Replace,
   Upload,
 } from "lucide-react";
 import { api } from "../lib/api";
-import type { AppError, TravelIdentity, TravelPlatformCred } from "../lib/types";
+import type {
+  AppError,
+  CfgDeployReport,
+  TravelIdentity,
+  TravelPlatformCred,
+  Ts3Identity,
+} from "../lib/types";
 
 const errorMessage = (error: unknown) =>
   (error as AppError)?.message || "操作失败";
@@ -28,13 +37,38 @@ export function TravelPage({
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const [ts3Id, setTs3Id] = useState("");
+  const [ts3Identities, setTs3Identities] = useState<Ts3Identity[]>([]);
+  const [deploy, setDeploy] = useState<CfgDeployReport | null>(null);
 
   const refresh = async () => {
     setItems(await api.travelIdentities());
   };
 
   useEffect(() => {
-    void refresh().catch((error) => notify("error", errorMessage(error)));
+    void (async () => {
+      try {
+        const [list, remembered] = await Promise.all([
+          api.ts3Identities(),
+          api.rememberedTs3Id(),
+        ]);
+        setTs3Identities(list);
+        const detected = list.find((item) => item.uniqueId)?.uniqueId;
+        setTs3Id(detected || remembered || "");
+      } catch {
+        try {
+          const remembered = await api.rememberedTs3Id();
+          if (remembered) setTs3Id(remembered);
+        } catch {
+          /* TeamSpeak 不是使用云存档的前提 */
+        }
+      }
+      try {
+        await refresh();
+      } catch (error) {
+        notify("error", errorMessage(error));
+      }
+    })();
   }, []);
 
   const filtered = useMemo(() => {
@@ -68,6 +102,59 @@ export function TravelPage({
       notify("success", `${label}已复制`);
     } catch (error) {
       notify("error", errorMessage(error));
+    }
+  };
+
+  const runVault = async (action: () => Promise<void>) => {
+    const id = ts3Id.trim();
+    if (!id) {
+      notify("error", "请填写 TeamSpeak Unique ID");
+      return;
+    }
+    setBusy(true);
+    try {
+      await action();
+    } catch (error) {
+      notify("error", errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const uploadVault = () =>
+    void runVault(async () => {
+      await api.uploadTravelVault(ts3Id);
+      notify("success", "已按当前 TeamSpeak ID 上传外出资料");
+    });
+
+  const downloadVault = () =>
+    void runVault(async () => {
+      const result = await api.downloadTravelVault(ts3Id);
+      await refresh();
+      notify(
+        "success",
+        `已拉取 ${result.identityCount} 个身份。需要覆盖本机 CFG 时再点「一键替代」`,
+      );
+    });
+
+  const replaceVault = () =>
+    void runVault(async () => {
+      const result = await api.replaceTravelVault(ts3Id);
+      await refresh();
+      setDeploy(result.deploy);
+      notify("success", result.deploy.message);
+    });
+
+  const deployLocal = async () => {
+    setBusy(true);
+    try {
+      const report = await api.deployTravelCfgs();
+      setDeploy(report);
+      notify("success", report.message);
+    } catch (error) {
+      notify("error", errorMessage(error));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -136,10 +223,77 @@ export function TravelPage({
         <div>
           <h1>外出资料</h1>
           <p>
-            网吧或不带 Steam 凭证时，在这里复制 Steam 登录名、5E/完美账号和 CFG。不能替你登 Steam，也没有 Steam 密码。
+            用自己的 TeamSpeak Unique ID 登录云存档，或继续用 U 盘资料包。不能替你登 Steam，也没有 Steam 密码。
           </p>
         </div>
       </header>
+      <section className="travel-vault">
+        <h2>TeamSpeak 存档</h2>
+        <p>
+          在 TeamSpeak「身份」里复制 Unique ID。相同 ID 拉取同一份资料。知道这个 ID 就能读取 5E/完美明文，不要填别人的。
+        </p>
+        {ts3Identities.length > 0 ? (
+          <div className="travel-identities">
+            {ts3Identities.map((identity) => (
+              <button
+                key={identity.uuid}
+                type="button"
+                className="button secondary"
+                disabled={busy || !identity.uniqueId}
+                onClick={() => identity.uniqueId && setTs3Id(identity.uniqueId)}
+              >
+                {identity.nickname || "TeamSpeak 身份"}
+                {identity.uniqueId ? "" : "（请手动粘贴 Unique ID）"}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p>本机没有读到 TeamSpeak 身份时，把 Unique ID 粘贴到下面即可。</p>
+        )}
+        <div className="travel-vault-row">
+          <label className="search">
+            <input
+              aria-label="TeamSpeak Unique ID"
+              value={ts3Id}
+              onChange={(event) => setTs3Id(event.target.value)}
+              placeholder="TeamSpeak Unique ID"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <button className="button secondary" disabled={busy} onClick={uploadVault}>
+            <CloudUpload />
+            <span>上传当前资料</span>
+          </button>
+          <button className="button secondary" disabled={busy} onClick={downloadVault}>
+            <CloudDownload />
+            <span>拉取资料</span>
+          </button>
+          <button className="button primary" disabled={busy} onClick={replaceVault}>
+            <Replace />
+            <span>一键替代</span>
+          </button>
+          <button className="button secondary" disabled={busy || items.length === 0} onClick={() => void deployLocal()}>
+            <Upload />
+            <span>写入本机 CS2</span>
+          </button>
+        </div>
+        {deploy ? (
+          <div className="travel-deploy">
+            <p>{deploy.message}</p>
+            <div>
+              <code>{deploy.execCommand}</code>
+              <button
+                className="icon-button"
+                aria-label="复制控制台指令"
+                onClick={() => void copyValue("控制台指令", deploy.execCommand)}
+              >
+                <Copy />
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </section>
       <div className="toolbar">
         <label className="search">
           <input
@@ -163,7 +317,7 @@ export function TravelPage({
           <BookUser />
           <h2>还没有外出资料</h2>
           <p>
-            在家用机导出资料包，和便携版一起带到网吧后在本页导入。切号仍只对已在本机记住的 Steam 账号开放。
+            在家用机用 TeamSpeak Unique ID 上传，或导出资料包带到网吧。切号仍只对已在本机记住的 Steam 账号开放。
           </p>
         </div>
       ) : (

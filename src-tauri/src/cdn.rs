@@ -7,3 +7,4 @@ pub const TEAMSPEAK_CLIENT_URL: &str =
 pub const TEAMSPEAK_CLIENT_FILE: &str = "TeamSpeak3-Client-win64.exe";
 pub const APP_LATEST_URL: &str = "https://cdn.qrqto.club/app/latest.json";
 pub const PACKAGES_URL: &str = "https://cdn.qrqto.club/packages.json";
+pub const VAULT_ARCHIVE_URL: &str = "https://cdn.qrqto.club/vault/v1/archive";

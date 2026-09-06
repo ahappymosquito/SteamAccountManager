@@ -1,0 +1,22 @@
+[Unit]
+Description=Steam Account Manager TS3 vault
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+Environment=SAM_VAULT_HOST=127.0.0.1
+Environment=SAM_VAULT_PORT=8788
+Environment=SAM_VAULT_DIR=/var/lib/sam-vault
+ExecStart=/usr/bin/python3 /opt/sam-vault/vault_server.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sam-vault
+
+[Install]
+WantedBy=multi-user.target

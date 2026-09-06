@@ -1,6 +1,6 @@
 /** Typed, centralized access to the controlled Tauri IPC surface. */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Account, AccountCfgAssignment, CfgCaptureResult, CfgProfile, CfgRuntimeAccountSummary, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, RestoreSelection, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchProgress, SwitchResult, TagOption, TravelIdentity, TravelImportResult, UpdateInfo, UpdateProgress } from "./types";
+import type { Account, AccountCfgAssignment, CfgCaptureResult, CfgDeployReport, CfgProfile, CfgRuntimeAccountSummary, Cs2Config, CurrentStatus, DownloadProgress, ImportPreview, PlatformApp, PlatformCredentialStatus, PlatformLink, PlayerSnapshot, ProfileInput, RestoreSelection, SoftwareStatus, StartupSteamResult, SteamLoginSession, SteamLoginStatus, SwitchLog, SwitchProgress, SwitchResult, TagOption, TravelIdentity, TravelImportResult, Ts3Identity, UpdateInfo, UpdateProgress, VaultReplaceResult } from "./types";
 
 export const api = {
   initializeSteam: () => invoke<StartupSteamResult>("initialize_steam"),
@@ -54,6 +54,12 @@ export const api = {
   travelIdentities: () => invoke<TravelIdentity[]>("list_travel_identities"),
   exportTravelPack: (path:string) => invoke<TravelImportResult>("export_travel_pack_file",{path}),
   importTravelPack: (path:string) => invoke<TravelImportResult>("import_travel_pack_file",{path}),
+  ts3Identities: () => invoke<Ts3Identity[]>("list_ts3_identities"),
+  rememberedTs3Id: () => invoke<string | null>("remembered_ts3_id"),
+  uploadTravelVault: (ts3Id:string) => invoke<string>("upload_travel_vault",{ts3Id}),
+  downloadTravelVault: (ts3Id:string) => invoke<TravelImportResult>("download_travel_vault",{ts3Id}),
+  replaceTravelVault: (ts3Id:string) => invoke<VaultReplaceResult>("replace_travel_vault",{ts3Id}),
+  deployTravelCfgs: () => invoke<CfgDeployReport>("deploy_travel_cfgs"),
   softwareStatuses: () => invoke<SoftwareStatus[]>("list_software_statuses"),
   downloadProgress: () => invoke<DownloadProgress[]>("list_download_progress"),
   openOfficialUrl: (code:string) => invoke<void>("open_official_url",{code}),

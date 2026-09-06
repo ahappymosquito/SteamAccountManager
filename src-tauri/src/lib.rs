@@ -10,6 +10,8 @@ mod player_query;
 mod software;
 mod steam;
 mod travel;
+mod ts3_identity;
+mod vault;
 mod version;
 
 use crate::database::{validate_steam_id, Database};
@@ -1181,10 +1183,10 @@ fn export_travel_pack_file(state: State<AppState>, path: String) -> AppResult<Tr
     })
 }
 
-#[tauri::command]
-fn import_travel_pack_file(state: State<AppState>, path: String) -> AppResult<TravelImportResult> {
-    let document = read_backup_file(Path::new(&path))?;
-    let identities = travel::parse_pack(&document)?;
+fn import_travel_identities_into(
+    state: &AppState,
+    identities: &[TravelIdentity],
+) -> AppResult<TravelImportResult> {
     if identities.is_empty() {
         return Err(AppError::new(
             "TRAVEL_PACK_EMPTY",
@@ -1193,11 +1195,87 @@ fn import_travel_pack_file(state: State<AppState>, path: String) -> AppResult<Tr
     }
     let current = state.db.export_backup()?;
     write_pre_restore_snapshot(&state.data_dir, &current)?;
-    let (result, profiles) = state.db.import_travel_identities(&identities)?;
+    let (result, profiles) = state.db.import_travel_identities(identities)?;
     for profile in profiles {
         cs2::write_managed_profile(&state.data_dir, &profile)?;
     }
     Ok(result)
+}
+
+fn optional_steam_dir(state: &AppState) -> Option<PathBuf> {
+    steam_path(state).ok()
+}
+
+fn remember_ts3_id(state: &AppState, ts3_id: &str) -> AppResult<String> {
+    let ts3_id = ts3_identity::validate_ts3_id(ts3_id)?;
+    state.db.set_setting(
+        "travel_ts3_id",
+        &serde_json::to_string(&ts3_id)
+            .map_err(|_| AppError::new("SETTING_INVALID", "无法保存 TeamSpeak ID"))?,
+    )?;
+    Ok(ts3_id)
+}
+
+#[tauri::command]
+fn import_travel_pack_file(state: State<AppState>, path: String) -> AppResult<TravelImportResult> {
+    let document = read_backup_file(Path::new(&path))?;
+    let identities = travel::parse_pack(&document)?;
+    import_travel_identities_into(&state, &identities)
+}
+
+#[tauri::command]
+fn list_ts3_identities() -> AppResult<Vec<Ts3Identity>> {
+    ts3_identity::list_ts3_identities()
+}
+
+#[tauri::command]
+fn remembered_ts3_id(state: State<AppState>) -> AppResult<Option<String>> {
+    Ok(state.db.setting("travel_ts3_id")?.and_then(|value| {
+        serde_json::from_str(&value).ok().or_else(|| {
+            let trimmed = value.trim().trim_matches('"');
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+    }))
+}
+
+#[tauri::command]
+fn upload_travel_vault(state: State<AppState>, ts3_id: String) -> AppResult<String> {
+    let ts3_id = remember_ts3_id(&state, &ts3_id)?;
+    let identities = state.db.list_travel_identities()?;
+    if identities.is_empty() {
+        return Err(AppError::new(
+            "TRAVEL_PACK_EMPTY",
+            "本机还没有外出资料可上传",
+        ));
+    }
+    let document = travel::build_pack(&identities);
+    vault::upload_pack(&ts3_id, &document)
+}
+
+#[tauri::command]
+fn download_travel_vault(state: State<AppState>, ts3_id: String) -> AppResult<TravelImportResult> {
+    let ts3_id = remember_ts3_id(&state, &ts3_id)?;
+    let identities = vault::download_pack(&ts3_id)?;
+    import_travel_identities_into(&state, &identities)
+}
+
+#[tauri::command]
+fn replace_travel_vault(state: State<AppState>, ts3_id: String) -> AppResult<VaultReplaceResult> {
+    let ts3_id = remember_ts3_id(&state, &ts3_id)?;
+    let identities = vault::download_pack(&ts3_id)?;
+    let import = import_travel_identities_into(&state, &identities)?;
+    let steam = optional_steam_dir(&state);
+    Ok(VaultReplaceResult {
+        import,
+        deploy: vault::deploy_identities(steam.as_deref(), &identities),
+    })
+}
+
+#[tauri::command]
+fn deploy_travel_cfgs(state: State<AppState>) -> AppResult<CfgDeployReport> {
+    let identities = state.db.list_travel_identities()?;
+    let steam = optional_steam_dir(&state);
+    Ok(vault::deploy_identities(steam.as_deref(), &identities))
 }
 
 fn resolve_teamspeak_app_with(
@@ -1658,6 +1736,12 @@ pub fn run() {
             list_travel_identities,
             export_travel_pack_file,
             import_travel_pack_file,
+            list_ts3_identities,
+            remembered_ts3_id,
+            upload_travel_vault,
+            download_travel_vault,
+            replace_travel_vault,
+            deploy_travel_cfgs,
             list_software_statuses,
             list_download_progress,
             open_official_url,

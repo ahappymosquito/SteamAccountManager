@@ -414,6 +414,30 @@ pub struct TravelImportResult {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct Ts3Identity {
+    pub uuid: String,
+    pub nickname: Option<String>,
+    pub unique_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CfgDeployReport {
+    pub game_ready: bool,
+    pub written: Vec<String>,
+    pub exec_command: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultReplaceResult {
+    pub import: TravelImportResult,
+    pub deploy: CfgDeployReport,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountCfgAssignment {
     pub steam_account_id: String,
     pub steam_id64: String,

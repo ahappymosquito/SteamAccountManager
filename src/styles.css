@@ -110,6 +110,17 @@ html,body,#root{height:100%;overflow:hidden}
 @media(max-width:1100px){.software-row{grid-template-columns:48px minmax(180px,1fr) auto}.software-actions{grid-column:2/-1}}
 
 /* Travel identities: copy-first cards that do not require local Steam credentials. */
+.travel-vault{margin:0 0 14px;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:flex;flex-direction:column;gap:10px}
+.travel-vault h2{margin:0;font-size:13px}
+.travel-vault p{margin:0;color:var(--muted);font-size:12px;line-height:1.55;max-width:72ch}
+.travel-vault-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.travel-vault-row .search{flex:1;min-width:220px}
+.travel-identities{display:flex;flex-wrap:wrap;gap:6px}
+.travel-identities .button{padding:4px 8px;font-size:11px}
+.travel-deploy{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:8px;background:var(--raised)}
+.travel-deploy p{color:var(--ink)}
+.travel-deploy>div{display:flex;align-items:center;gap:8px}
+.travel-deploy code{font:12px/1.4 "Cascadia Mono",monospace}
 .travel-list{display:flex;flex-direction:column;gap:10px;margin:0;padding:0;list-style:none}
 .travel-card{padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .travel-card>header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}

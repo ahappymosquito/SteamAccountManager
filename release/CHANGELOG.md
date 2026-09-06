@@ -2,6 +2,12 @@
 
 记录 Steam Account Manager 各版本面向用户的变更，与本地安装包、便携版放在同一目录。
 
+## 1.3.0 TeamSpeak 云存档
+
+- 外出资料可用自己的 TeamSpeak Unique ID 登录云端存档：相同 ID 拉取同一份账号和 CFG。
+- 支持一键替代本机 CFG；若 CS2 还没启动过，会给出启动后要在控制台输入的 `exec` 指令。
+- 仍可用 U 盘资料包；不保存 Steam 密码或 Steam Guard。Unique ID 相当于存档钥匙，不要填别人的。
+
 ## 1.2.0 外出资料卡
 
 - 新增「外出资料」页：不依赖本机 Steam 凭证，按身份查看并复制 Steam 登录名、5E/完美登录账号与密码、CFG。
