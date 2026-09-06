@@ -60,7 +60,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 
 ### 页面
 
-- `pages/TravelPage.tsx`：外出资料卡，TeamSpeak Unique ID 云存档与 U 盘身份包。
+- `pages/TravelPage.tsx`：外出资料卡，短名字+口令云存档与 U 盘身份包。
 - `pages/Cs2Page.tsx`：CFG 方案文件管理、源码编辑、注释刷新、导入导出，以及本机运行配置记录。
 - `pages/PlatformsPage.tsx`：统一管理 Steam、5E、完美和 TeamSpeak 3 的发现、下载、路径配置、启动与可持久化拖拽顺序。
 - `pages/SettingsPage.tsx`：切换超时、默认折叠的平台凭据、统一数据导入导出与备份恢复。版本与更新入口在左侧栏底部。
@@ -105,7 +105,7 @@ SQLite、Steam 文件/注册表/进程、平台接口与 Windows 安装环境
 | `cs2_runtime.rs` | 采集 userdata 中已运行的 CS2 配置、转换为 CFG 并保留记录 |
 | `travel.rs` | 外出资料包 JSON 校验与生成 |
 | `ts3_identity.rs` | 读取本机 TeamSpeak 身份与 Unique ID |
-| `vault.rs` | 按 Unique ID 上传、拉取云存档并部署 CFG |
+| `vault.rs` | 按短名字和口令上传、拉取云存档并部署 CFG |
 | `scripts/vault-server/` | CDN 上的 Python 存档服务与 nginx/systemd 配置 |
 | `player_query.rs` | 5E/完美世界玩家数据请求、重试、定级与赛季排名解析和稳定错误映射 |
 | `software.rs` | 平台软件下载、进度、路径验证和启动 |

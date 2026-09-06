@@ -140,6 +140,14 @@ catch {
     Write-Warning "CDN publish skipped: $_"
 }
 
+$publishVault = Join-Path $PSScriptRoot "publish-vault.ps1"
+try {
+    & $publishVault
+}
+catch {
+    Write-Warning "Vault server publish skipped: $_"
+}
+
 foreach ($buildDirectory in @(
     (Join-Path $projectRoot "src-tauri\target"),
     (Join-Path $projectRoot "dist")

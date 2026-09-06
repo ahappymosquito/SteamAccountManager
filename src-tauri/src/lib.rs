@@ -1206,14 +1206,12 @@ fn optional_steam_dir(state: &AppState) -> Option<PathBuf> {
     steam_path(state).ok()
 }
 
-fn remember_ts3_id(state: &AppState, ts3_id: &str) -> AppResult<String> {
-    let ts3_id = ts3_identity::validate_ts3_id(ts3_id)?;
+fn remember_vault_name(state: &AppState, name: &str) -> AppResult<()> {
     state.db.set_setting(
-        "travel_ts3_id",
-        &serde_json::to_string(&ts3_id)
-            .map_err(|_| AppError::new("SETTING_INVALID", "无法保存 TeamSpeak ID"))?,
-    )?;
-    Ok(ts3_id)
+        "travel_vault_name",
+        &serde_json::to_string(name)
+            .map_err(|_| AppError::new("SETTING_INVALID", "无法保存存档名字"))?,
+    )
 }
 
 #[tauri::command]
@@ -1229,8 +1227,8 @@ fn list_ts3_identities() -> AppResult<Vec<Ts3Identity>> {
 }
 
 #[tauri::command]
-fn remembered_ts3_id(state: State<AppState>) -> AppResult<Option<String>> {
-    Ok(state.db.setting("travel_ts3_id")?.and_then(|value| {
+fn remembered_vault_name(state: State<AppState>) -> AppResult<Option<String>> {
+    Ok(state.db.setting("travel_vault_name")?.and_then(|value| {
         serde_json::from_str(&value).ok().or_else(|| {
             let trimmed = value.trim().trim_matches('"');
             (!trimmed.is_empty()).then(|| trimmed.to_string())
@@ -1239,8 +1237,8 @@ fn remembered_ts3_id(state: State<AppState>) -> AppResult<Option<String>> {
 }
 
 #[tauri::command]
-fn upload_travel_vault(state: State<AppState>, ts3_id: String) -> AppResult<String> {
-    let ts3_id = remember_ts3_id(&state, &ts3_id)?;
+fn upload_travel_vault(state: State<AppState>, name: String, pin: String) -> AppResult<String> {
+    let login = vault::parse_login(&name, &pin)?;
     let identities = state.db.list_travel_identities()?;
     if identities.is_empty() {
         return Err(AppError::new(
@@ -1249,20 +1247,28 @@ fn upload_travel_vault(state: State<AppState>, ts3_id: String) -> AppResult<Stri
         ));
     }
     let document = travel::build_pack(&identities);
-    vault::upload_pack(&ts3_id, &document)
+    let updated = vault::upload_pack(&login.name, &pin, &document)?;
+    remember_vault_name(&state, &login.name)?;
+    Ok(updated)
 }
 
 #[tauri::command]
-fn download_travel_vault(state: State<AppState>, ts3_id: String) -> AppResult<TravelImportResult> {
-    let ts3_id = remember_ts3_id(&state, &ts3_id)?;
-    let identities = vault::download_pack(&ts3_id)?;
+fn download_travel_vault(
+    state: State<AppState>,
+    name: String,
+    pin: String,
+) -> AppResult<TravelImportResult> {
+    let identities = vault::download_pack(&name, &pin)?;
     import_travel_identities_into(&state, &identities)
 }
 
 #[tauri::command]
-fn replace_travel_vault(state: State<AppState>, ts3_id: String) -> AppResult<VaultReplaceResult> {
-    let ts3_id = remember_ts3_id(&state, &ts3_id)?;
-    let identities = vault::download_pack(&ts3_id)?;
+fn replace_travel_vault(
+    state: State<AppState>,
+    name: String,
+    pin: String,
+) -> AppResult<VaultReplaceResult> {
+    let identities = vault::download_pack(&name, &pin)?;
     let import = import_travel_identities_into(&state, &identities)?;
     let steam = optional_steam_dir(&state);
     Ok(VaultReplaceResult {
@@ -1737,7 +1743,7 @@ pub fn run() {
             export_travel_pack_file,
             import_travel_pack_file,
             list_ts3_identities,
-            remembered_ts3_id,
+            remembered_vault_name,
             upload_travel_vault,
             download_travel_vault,
             replace_travel_vault,

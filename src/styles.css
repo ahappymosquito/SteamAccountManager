@@ -111,12 +111,11 @@ html,body,#root{height:100%;overflow:hidden}
 
 /* Travel identities: copy-first cards that do not require local Steam credentials. */
 .travel-vault{margin:0 0 14px;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:flex;flex-direction:column;gap:10px}
-.travel-vault h2{margin:0;font-size:13px}
-.travel-vault p{margin:0;color:var(--muted);font-size:12px;line-height:1.55;max-width:72ch}
 .travel-vault-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.travel-vault-row .search{flex:1;min-width:220px}
-.travel-identities{display:flex;flex-wrap:wrap;gap:6px}
-.travel-identities .button{padding:4px 8px;font-size:11px}
+.travel-vault-row .search{flex:1;min-width:160px}
+.travel-vault-row .search.pin{flex:0 0 148px;min-width:120px;max-width:168px}
+.travel-usb{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.travel-usb .button{padding:4px 8px;font-size:11px;color:var(--muted)}
 .travel-deploy{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:8px;background:var(--raised)}
 .travel-deploy p{color:var(--ink)}
 .travel-deploy>div{display:flex;align-items:center;gap:8px}

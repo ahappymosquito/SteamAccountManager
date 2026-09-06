@@ -1,5 +1,7 @@
-//! 从本机 TeamSpeak 3 客户端读取身份，供外出存档登录。
-use crate::error::{AppError, AppResult};
+//! 从本机 TeamSpeak 3 客户端读取身份；外出存档已改用短名字和口令。
+#[cfg(test)]
+use crate::error::AppError;
+use crate::error::AppResult;
 use crate::models::Ts3Identity;
 use rusqlite::Connection;
 use std::{
@@ -174,6 +176,7 @@ pub fn list_ts3_identities() -> AppResult<Vec<Ts3Identity>> {
     Ok(identities)
 }
 
+#[cfg(test)]
 pub fn validate_ts3_id(value: &str) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.len() < 8

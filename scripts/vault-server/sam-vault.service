@@ -1,5 +1,5 @@
 [Unit]
-Description=Steam Account Manager TS3 vault
+Description=Steam Account Manager travel vault
 After=network.target
 
 [Service]

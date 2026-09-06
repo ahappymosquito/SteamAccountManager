@@ -1,4 +1,4 @@
-# Reverse-proxy Steam Account Manager TS3 vault. Include inside each CDN HTTPS server.
+# Reverse-proxy Steam Account Manager name+PIN vault. Include inside each CDN HTTPS server.
 location ^~ /vault/ {
     proxy_pass http://127.0.0.1:8788/;
     proxy_http_version 1.1;
@@ -13,7 +13,7 @@ location ^~ /vault/ {
     add_header Cache-Control "no-store" always;
     add_header Access-Control-Allow-Origin "*" always;
     add_header Access-Control-Allow-Methods "GET, PUT, OPTIONS" always;
-    add_header Access-Control-Allow-Headers "Content-Type, X-Ts3-Id" always;
+    add_header Access-Control-Allow-Headers "Content-Type, X-Vault-Name, X-Vault-Pin, X-Ts3-Id" always;
     add_header X-Content-Type-Options nosniff always;
     if ($request_method = OPTIONS) {
         return 204;
